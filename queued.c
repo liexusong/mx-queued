@@ -682,14 +682,14 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
     
     time(&mx_current_time);
     
-    while (!mx_skiplist_empty(mx_daemon->delay_queue->queue)) {
-        if (mx_skiplist_find_min(mx_daemon->delay_queue->queue, (void **)&item) != 0) {
+    while (mx_queue_size(mx_daemon->delay_queue) > 0) {
+        if (!mx_queue_fetch_top(mx_daemon->delay_queue, (void **)&item)) {
             break;
         }
         if (item->delay < mx_current_time) {
             item->delay = 0;
-            mx_skiplist_insert(item->belong->queue, item->prival, item);
-            mx_skiplist_delete_min(mx_daemon->delay_queue->queue);
+            mx_queue_ready_insert(item->belong, item);
+            mx_queue_delete_top(mx_daemon->delay_queue);
             continue;
         }
         break;
