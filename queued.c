@@ -138,6 +138,10 @@ struct mx_queue_item_s {
 };
 
 
+#define MX_ITEM_DATA(item) (item)->data
+#define MX_ITEM_SIZE(item) (item)->length
+
+
 /*
  * Queue API
  */
@@ -146,6 +150,7 @@ struct mx_queue_item_s {
 #define mx_queue_fetch_top(_queue, retval) (mx_skiplist_find_min((_queue)->queue, (retval)) == SKL_STATUS_OK)
 #define mx_queue_delete_top(_queue) mx_skiplist_delete_min((_queue)->queue)
 #define mx_queue_size(_queue) mx_skiplist_elements((_queue)->queue)
+
 
 mx_connection_t *mx_create_connection(int fd);
 void mx_free_connection(mx_connection_t *conn);
@@ -889,6 +894,31 @@ int main(int argc, char **argv)
 }
 
 
+/*
+ * Create a new queue item
+ */
+mx_queue_item_t *mx_queue_item_create(int id, int prival, int delay, mx_queue_t *belong, int size)
+{
+    mx_queue_item_t *item;
+    
+    item = malloc(sizeof(*item) + size + 2);
+    if (item) {
+        item->id = id;
+        item->prival = prival;
+        item->belong = belong;
+        item->length = size;
+        if (delay > 0) {
+            item->delay = mx_current_time + delay;
+        } else {
+            item->delay = 0;
+        }
+    }
+    return item;
+}
+
+
+/* Commands handlers */
+
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
     mx_queue_t *queue;
@@ -919,26 +949,16 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     }
     conn->use_queue = queue;
     
-    
-    item = malloc(sizeof(*item) + item_len + 2);
+    item = mx_queue_item_create(mx_daemon->item_id, prival, delay_time, queue, item_len);
     if (!item) {
         mx_send_reply(conn, "-ERR cannot create job");
         return;
     }
-    
-    item->id = mx_daemon->item_id++;
-    item->prival = prival;
-    item->belong = queue;
-    item->length = item_len;
-    if (delay_time > 0) {
-        item->delay = mx_current_time + delay_time;
-    } else {
-        item->delay = 0;
-    }
+    mx_daemon->item_id++;
     
     conn->item = item;
-    conn->itemptr = item->data;
-    conn->itembytes = item_len + 2;
+    conn->itemptr = MX_ITEM_DATA(item);
+    conn->itembytes = MX_ITEM_SIZE(item) + 2;
     
     remain = conn->recvlast - conn->recvpos;
     if (remain > 0) {
