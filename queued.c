@@ -54,6 +54,7 @@
 typedef struct mx_connection_s mx_connection_t;
 typedef struct mx_token_s mx_token_t;
 typedef struct mx_queue_item_s mx_queue_item_t;
+typedef mx_skiplist_t mx_queue_t;
 
 typedef enum {
     mx_log_error,
@@ -84,7 +85,7 @@ struct mx_connection_s {
     char *sendend;
     void (*rev_handler)(mx_connection_t *conn);
     void (*wev_handler)(mx_connection_t *conn);
-    mx_skiplist_t *use_queue;
+    mx_queue_t *use_queue;
     mx_queue_item_t *item;
     char *itemptr;
     int itembytes;
@@ -101,7 +102,7 @@ typedef struct mx_daemon_s {
     char *log_file;
     FILE *log_fd;
     HashTable *table;
-    mx_skiplist_t *delay_queue;
+    mx_queue_t *delay_queue;
     int item_id;
     mx_connection_t *free_connections;
     int free_connections_count;
@@ -126,7 +127,7 @@ struct mx_queue_item_s {
     int id;
     int prival;
     int delay;
-    mx_skiplist_t *belong;
+    mx_queue_t *belong;
     int length;
     char data[0];
 };
@@ -839,7 +840,7 @@ int main(int argc, char **argv)
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-    mx_skiplist_t *queue;
+    mx_queue_t *queue;
     mx_queue_item_t *item;
     int item_len, remain, prival, delay_time;
     
@@ -910,7 +911,7 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
 
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-    mx_skiplist_t *queue;
+    mx_queue_t *queue;
     mx_queue_item_t *item;
 
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
@@ -931,7 +932,7 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 
 void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-    mx_skiplist_t *queue;
+    mx_queue_t *queue;
     char sndbuf[64];
     
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
