@@ -6,11 +6,11 @@ The fast message queue server
 <h3>communication protocol:</h3>
 
 1) Push a job into the queue<br />
-push [queue-name] [priority-value] [delay-time] [job-size]\r\n<br />
+<b>push</b> &lt;queue-name&gt; &lt;priority-value&gt; &lt;delay-time&gt; &lt;job-size&gt;\r\n<br />
 [job-body]\r\n<br />
 
 2) Pop a job from the queue<br />
-pop [queue-name]\r\n<br />
+<b>pop</b> &lt;queue-name&gt;\r\n<br />
 
 3) Get the queue size<br />
-qsize [queue-name]<br />
+<b>qsize</b> &lt;queue-name&gt;<br />
