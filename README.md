@@ -1,4 +1,4 @@
 mx-queued
 =========
 
-fast message queue server
+The fast message queue server
