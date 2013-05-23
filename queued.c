@@ -141,7 +141,7 @@ void mx_send_client_body(mx_connection_t *conn);
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
-void mx_queuesize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
+void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 
 mx_command_t mx_commands[] = {
     {"push",  (sizeof("push")-1),  5, mx_push_handler},
