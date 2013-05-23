@@ -13,4 +13,4 @@ The fast message queue server
 <b>pop</b> &lt;queue-name&gt;\r\n<br />
 
 3) Get the queue size<br />
-<b>qsize</b> &lt;queue-name&gt;<br />
+<b>qsize</b> &lt;queue-name&gt;\r\n<br />
