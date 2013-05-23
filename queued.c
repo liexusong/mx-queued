@@ -38,12 +38,11 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include "dlist.h"
+#include "skiplist.h"
 #include "hash.h"
 #include "ae.h"
 
 
-#define MX_DEBUG 0
 #define MX_VERSION "0.01"
 #define MX_SERVER_PORT 21021
 #define MX_LOG_FILE "./mx-queue.log"
@@ -51,84 +50,85 @@
 #define MX_SENDBUF_SIZE 2048
 #define MX_FREE_CONNECTIONS_LIST_SIZE 1000
 
+
 typedef struct mx_connection_s mx_connection_t;
 typedef struct mx_token_s mx_token_t;
 typedef struct mx_queue_item_s mx_queue_item_t;
 
 typedef enum {
-	mx_log_error,
-	mx_log_notice,
-	mx_log_debug
+    mx_log_error,
+    mx_log_notice,
+    mx_log_debug
 } mx_log_level;
 
 typedef enum {
-	mx_event_reading,
-	mx_event_writing
+    mx_event_reading,
+    mx_event_writing
 } mx_event_state;
 
 typedef enum {
-	mx_send_header_phase,
-	mx_send_body_phase
+    mx_send_header_phase,
+    mx_send_body_phase
 } mx_send_item_phase;
 
 struct mx_connection_s {
-	int fd;
-	mx_event_state state;
-	char *recvbuf;
-	char *recvpos;
-	char *recvlast;
-	char *recvend;
-	char *sendbuf;
-	char *sendpos;
-	char *sendlast;
-	char *sendend;
-	void (*rev_handler)(mx_connection_t *conn);
-	void (*wev_handler)(mx_connection_t *conn);
-	char queue_name[128];
-	mx_list_t *use_queue;
-	mx_queue_item_t *item;
-	char *itemptr;
-	int itembytes;
-	int pushtail;
-	mx_send_item_phase phase;
-	mx_connection_t *free_next;
+    int fd;
+    mx_event_state state;
+    char *recvbuf;
+    char *recvpos;
+    char *recvlast;
+    char *recvend;
+    char *sendbuf;
+    char *sendpos;
+    char *sendlast;
+    char *sendend;
+    void (*rev_handler)(mx_connection_t *conn);
+    void (*wev_handler)(mx_connection_t *conn);
+    mx_skiplist_t *use_queue;
+    mx_queue_item_t *item;
+    char *itemptr;
+    int itembytes;
+    mx_send_item_phase phase;
+    mx_connection_t *free_next;
 };
 
 
 typedef struct mx_daemon_s {
-	int fd;
-	aeEventLoop *event;
-	short port;
-	int daemon_mode;
-	char *log_file;
-	FILE *log_fd;
-	HashTable *table;
-	mx_connection_t *free_connections;
-	int free_connections_count;
-	int openaof;
-	char *appendonlyfilepath;
-	FILE *appendonlyfile;
-	char *loadappendonlyfile;
+    int fd;
+    aeEventLoop *event;
+    short port;
+    int daemon_mode;
+    char *log_file;
+    FILE *log_fd;
+    HashTable *table;
+    mx_skiplist_t *delay_queue;
+    int item_id;
+    mx_connection_t *free_connections;
+    int free_connections_count;
 } mx_daemon_t;
 
 
 struct mx_token_s {
-	char  *value;
+    char  *value;
     size_t length;
 };
 
 
 typedef struct mx_command_s {
-	char *name;
-	int name_len;
-	int argcnt;
-	void (*handler)(mx_connection_t *, mx_token_t *, int);
+    char *name;
+    int name_len;
+    int argcnt;
+    void (*handler)(mx_connection_t *, mx_token_t *, int);
 } mx_command_t;
 
 
 struct mx_queue_item_s {
-	int length;
-	char data[0];
+    int id;
+    int prival;
+    int delay;
+    mx_skiplist_t *belong;
+    int length;
+    char data[0];
 };
 
 
@@ -136,16 +136,17 @@ mx_connection_t *mx_create_connection(int fd);
 void mx_free_connection(mx_connection_t *conn);
 void mx_send_client_response(mx_connection_t *conn);
 void mx_recv_client_request(mx_connection_t *conn);
+void mx_send_client_body(mx_connection_t *conn);
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_queuesize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 
 mx_command_t mx_commands[] = {
-	{"push", (sizeof("push")-1), 4, mx_push_handler},
-	{"pop", (sizeof("pop")-1), 3, mx_pop_handler},
-	{"queue-size", (sizeof("queue-size")-1), 2, mx_queuesize_handler},
-	{NULL, 0, 0, NULL}
+    {"push",  (sizeof("push")-1),  5, mx_push_handler},
+    {"pop",   (sizeof("pop")-1),   2, mx_pop_handler},
+    {"qsize", (sizeof("qsize")-1), 2, mx_qsize_handler},
+    {NULL, 0, 0, NULL}
 };
 
 
@@ -155,7 +156,7 @@ static time_t mx_current_time;
 
 void mx_write_log(mx_log_level level, const char *fmt, ...)
 {
-	va_list ap;
+    va_list ap;
     FILE *fp;
     struct tm *tm;
     time_t ts;
@@ -185,8 +186,8 @@ void mx_write_log(mx_log_level level, const char *fmt, ...)
 
 int mx_set_nonblocking(int fd)
 {
-	int flags;
-	
+    int flags;
+    
     if ((flags = fcntl(fd, F_GETFL, 0)) < 0 ||
          fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
         return -1;
@@ -195,34 +196,34 @@ int mx_set_nonblocking(int fd)
 
 void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
 {
-	mx_connection_t *conn = (mx_connection_t *)data;
-	
-	if (conn->fd != fd ||
-	   (mask == AE_READABLE && conn->state != mx_event_reading) ||
-	   (mask == AE_WRITABLE && conn->state != mx_event_writing)) {
-	    return;
-	}
-	
-	if (conn->state == mx_event_reading) {
-		if (conn->rev_handler) {
-			conn->rev_handler(conn);
-		} else {
-			mx_write_log(mx_log_notice, "not found reading event handler fd(%d)", conn->fd);
-		}
-	} else {
-		if (conn->wev_handler) {
-			conn->wev_handler(conn);
-		} else {
-			mx_write_log(mx_log_notice, "not found writing event handler fd(%d)", conn->fd);
-		}
-	}
-	return;
+    mx_connection_t *conn = (mx_connection_t *)data;
+    
+    if (conn->fd != fd ||
+       (mask == AE_READABLE && conn->state != mx_event_reading) ||
+       (mask == AE_WRITABLE && conn->state != mx_event_writing)) {
+        return;
+    }
+    
+    if (conn->state == mx_event_reading) {
+        if (conn->rev_handler) {
+            conn->rev_handler(conn);
+        } else {
+            mx_write_log(mx_log_notice, "not found reading event handler fd(%d)", conn->fd);
+        }
+    } else {
+        if (conn->wev_handler) {
+            conn->wev_handler(conn);
+        } else {
+            mx_write_log(mx_log_notice, "not found writing event handler fd(%d)", conn->fd);
+        }
+    }
+    return;
 }
 
 
 void mx_send_reply(mx_connection_t *conn, char *str)
 {
-	int len;
+    int len;
 
     len = strlen(str);
     if (len + 2 > (conn->sendend - conn->sendlast)) {
@@ -242,16 +243,37 @@ void mx_send_reply(mx_connection_t *conn, char *str)
 }
 
 
+void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
+{
+    char buf[128];
+    int len;
+    
+    len = sprintf(buf, "+OK %d %d\r\n", item->id, item->length);
+    memcpy(conn->sendlast, buf, len);
+    conn->sendlast += len;
+    
+    conn->item = item;
+    conn->itemptr = item->data;
+    conn->itembytes = item->length + 2;
+
+    conn->state = mx_event_writing;
+    conn->wev_handler = mx_send_client_body;
+    conn->phase = mx_send_header_phase;
+    
+    aeCreateFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE, mx_process_handler, conn);
+}
+
+
 mx_command_t *mx_find_command(char *name, int len)
 {
-	mx_command_t *cmd;
-	
-	for (cmd = mx_commands; cmd->name != NULL; cmd++) {
-		if (cmd->name_len == len && !strncmp(cmd->name, name, len)) {
-			break;
-		}
-	}
-	return cmd;
+    mx_command_t *cmd;
+    
+    for (cmd = mx_commands; cmd->name != NULL; cmd++) {
+        if (cmd->name_len == len && !strncmp(cmd->name, name, len)) {
+            break;
+        }
+    }
+    return cmd;
 }
 
 size_t mx_tokenize_command(char *command, mx_token_t *tokens, size_t max_tokens)
@@ -287,7 +309,7 @@ size_t mx_tokenize_command(char *command, mx_token_t *tokens, size_t max_tokens)
 
 void mx_process_command(mx_connection_t *conn)
 {
-	char *bline, *eline;
+    char *bline, *eline;
     mx_token_t tokens[MX_MAX_TOKENS];
     int tokens_count;
     mx_command_t *cmd;
@@ -307,27 +329,27 @@ again:
     
     tokens_count = mx_tokenize_command(bline, tokens, MX_MAX_TOKENS);
     if (tokens_count == 0) {
-    	mx_send_reply(conn, "-ERR command invaild");
-    	return;
+        mx_send_reply(conn, "-ERR command invaild");
+        return;
     }
     
     cmd = mx_find_command(tokens[0].value, tokens[0].length);
     if (!cmd->name || cmd->argcnt != tokens_count) {
-    	mx_send_reply(conn, "-ERR command invaild");
-    	return;
+        mx_send_reply(conn, "-ERR command invaild");
+        return;
     }
     
     cmd->handler(conn, tokens, tokens_count);
     
     if (conn->recvpos < conn->recvlast) {
-    	movcnt = conn->recvlast - conn->recvpos;
-    	memcpy(conn->recvbuf, conn->recvpos, movcnt);
-    	conn->recvpos = conn->recvbuf;
-    	conn->recvlast = conn->recvbuf + movcnt;
-    	goto again;
+        movcnt = conn->recvlast - conn->recvpos;
+        memcpy(conn->recvbuf, conn->recvpos, movcnt);
+        conn->recvpos = conn->recvbuf;
+        conn->recvlast = conn->recvbuf + movcnt;
+        goto again;
     } else { /* all buffer process finish */
-    	conn->recvpos = conn->recvbuf;
-    	conn->recvlast = conn->recvbuf;
+        conn->recvpos = conn->recvbuf;
+        conn->recvlast = conn->recvbuf;
     }
     return;
 }
@@ -335,9 +357,9 @@ again:
 
 void mx_send_client_response(mx_connection_t *conn)
 {
-	int wcount, wsize = conn->sendlast - conn->sendpos;
+    int wcount, wsize = conn->sendlast - conn->sendpos;
 
-	wcount = write(conn->fd, conn->sendpos, wsize);
+    wcount = write(conn->fd, conn->sendpos, wsize);
     if (wcount == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             mx_write_log(mx_log_error, "Failed to read, and not due to blocking");
@@ -352,99 +374,99 @@ void mx_send_client_response(mx_connection_t *conn)
     conn->sendpos += wcount;
     
     if (conn->sendpos >= conn->sendlast) {
-    	conn->sendpos = conn->sendbuf;
-    	conn->sendlast = conn->sendbuf;
-    	conn->state = mx_event_reading;
-    	conn->rev_handler = mx_recv_client_request;
-    	conn->wev_handler = NULL;
-    	aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE);
+        conn->sendpos = conn->sendbuf;
+        conn->sendlast = conn->sendbuf;
+        conn->state = mx_event_reading;
+        conn->rev_handler = mx_recv_client_request;
+        conn->wev_handler = NULL;
+        aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE);
     }
 }
 
 
 void mx_send_client_body(mx_connection_t *conn)
 {
-	int wsize, wcount;
-	
-	switch (conn->phase) {
-	case mx_send_header_phase:
-	{
-		wsize = conn->sendlast - conn->sendpos;
-		if (wsize == 0) {
-			conn->phase = mx_send_body_phase;
-			goto send_body_flag;
-		}
-		
-		wcount = write(conn->fd, conn->sendpos, wsize);
-		if (wcount == -1) {
-	        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-	            mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
-	            mx_free_connection(conn);
-	            return;
-	        }
-	    } else if (wcount == 0) {
-	        mx_free_connection(conn);
-	        return;
-	    }
-	    
-	    conn->sendpos += wcount;
-	    if (wcount == wsize) {
-	    	conn->phase = mx_send_body_phase;
-			goto send_body_flag;
-	    }
-	    break;
-	}
-	case mx_send_body_phase:
-	{
+    int wsize, wcount;
+    
+    switch (conn->phase) {
+    case mx_send_header_phase:
+    {
+        wsize = conn->sendlast - conn->sendpos;
+        if (wsize == 0) {
+            conn->phase = mx_send_body_phase;
+            goto send_body_flag;
+        }
+        
+        wcount = write(conn->fd, conn->sendpos, wsize);
+        if (wcount == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
+                mx_free_connection(conn);
+                return;
+            }
+        } else if (wcount == 0) {
+            mx_free_connection(conn);
+            return;
+        }
+        
+        conn->sendpos += wcount;
+        if (wcount == wsize) {
+            conn->phase = mx_send_body_phase;
+            goto send_body_flag;
+        }
+        break;
+    }
+    case mx_send_body_phase:
+    {
 send_body_flag:
-		wcount = write(conn->fd, conn->itemptr, conn->itembytes);
-		if (wcount == -1) {
-	        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-	            mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
-	            mx_free_connection(conn);
-	            return;
-	        }
-	    } else if (wcount == 0) {
-	        mx_free_connection(conn);
-	        return;
-	    }
-	    
-	    conn->itemptr += wcount;
-	    conn->itembytes -= wcount;
-	    
-	    if (conn->itembytes <= 0) {
-		    conn->sendpos = conn->sendbuf;
-		    conn->sendlast = conn->sendbuf;
-	    	
-	    	free(conn->item);
-	    	conn->item = NULL;
-			conn->itemptr = NULL;
-			conn->itembytes = 0;
-	    	
-	    	conn->state = mx_event_reading;
-	    	conn->rev_handler = mx_recv_client_request;
-	    	aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE);
-	    }
-		break;
-	}
-	}
-	return;
+        wcount = write(conn->fd, conn->itemptr, conn->itembytes);
+        if (wcount == -1) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
+                mx_free_connection(conn);
+                return;
+            }
+        } else if (wcount == 0) {
+            mx_free_connection(conn);
+            return;
+        }
+        
+        conn->itemptr += wcount;
+        conn->itembytes -= wcount;
+        
+        if (conn->itembytes <= 0) {
+            conn->sendpos = conn->sendbuf;
+            conn->sendlast = conn->sendbuf;
+            
+            free(conn->item);
+            conn->item = NULL;
+            conn->itemptr = NULL;
+            conn->itembytes = 0;
+            
+            conn->state = mx_event_reading;
+            conn->rev_handler = mx_recv_client_request;
+            aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE);
+        }
+        break;
+    }
+    }
+    return;
 }
 
 
 void mx_recv_client_request(mx_connection_t *conn)
 {
-	int rsize, rbytes;
+    int rsize, rbytes;
 
-	rsize = conn->recvend - conn->recvlast;
-	if (rsize == 0) {
-		mx_write_log(mx_log_error, "Command line too long, connection fd(%d)", conn->fd);
-		mx_free_connection(conn);
-		return;
-	}
-	
-	rbytes = read(conn->fd, conn->recvlast, rsize);
-	if (rbytes == -1) {
+    rsize = conn->recvend - conn->recvlast;
+    if (rsize == 0) {
+        mx_write_log(mx_log_error, "Command line too long, connection fd(%d)", conn->fd);
+        mx_free_connection(conn);
+        return;
+    }
+    
+    rbytes = read(conn->fd, conn->recvlast, rsize);
+    if (rbytes == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             mx_write_log(mx_log_debug, "Failed to read, and not due to blocking");
             mx_free_connection(conn);
@@ -463,37 +485,31 @@ void mx_recv_client_request(mx_connection_t *conn)
 
 void mx_finish_recv_body(mx_connection_t *conn)
 {
-	if (conn->item->data[conn->item->length] != '\r' &&
-	    conn->item->data[conn->item->length+1] != '\n') {
-		mx_send_reply(conn, "-ERR queue item invaild");
-		return;
-	}
-	
-	if (conn->pushtail) {
-		mx_list_push_tail(conn->use_queue, conn->item);
-	} else {
-		mx_list_push(conn->use_queue, conn->item);
-	}
-	
-	if (mx_daemon->openaof) {
-		fprintf(mx_daemon->appendonlyfile, "%s %s %s %d\r\n", "push", conn->queue_name,
-		   (conn->pushtail ? "tail" : "head"), conn->item->length);
-		fwrite(conn->item->data, conn->item->length + 2, 1, mx_daemon->appendonlyfile);
-	}
-	
-	conn->queue_name[0] = '\0';
-	conn->use_queue = NULL;
-	conn->item = NULL;
-	conn->itemptr = NULL;
-	conn->itembytes = 0;
+    if (conn->item->data[conn->item->length] != '\r' &&
+        conn->item->data[conn->item->length+1] != '\n')
+    {
+        mx_send_reply(conn, "-ERR queue item invaild");
+        return;
+    }
+    
+    if (conn->item->delay > 0 && conn->item->delay > mx_current_time) {
+        mx_skiplist_insert(mx_daemon->delay_queue, conn->item->delay, conn->item);
+    } else {
+        mx_skiplist_insert(conn->use_queue, conn->item->prival, conn->item);
+    }
+    
+    conn->use_queue = NULL;
+    conn->item = NULL;
+    conn->itemptr = NULL;
+    conn->itembytes = 0;
 }
 
 void mx_recv_client_body(mx_connection_t *conn)
 {
-	int rcount;
+    int rcount;
 
-	rcount = read(conn->fd, conn->itemptr, conn->itembytes);
-	if (rcount == -1) {
+    rcount = read(conn->fd, conn->itemptr, conn->itembytes);
+    if (rcount == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             mx_write_log(mx_log_debug, "Failed to read, and not due to blocking");
             mx_free_connection(conn);
@@ -508,15 +524,15 @@ void mx_recv_client_body(mx_connection_t *conn)
     conn->itembytes -= rcount;
     
     if (conn->itembytes <= 0) {
-		mx_finish_recv_body(conn);
-		mx_send_reply(conn, "+OK");
-		return;
-	}
+        mx_finish_recv_body(conn);
+        mx_send_reply(conn, "+OK");
+        return;
+    }
 }
 
 void mx_accept_connection(aeEventLoop *eventLoop, int fd, void *data, int mask)
 {
-	int sock, flags = 1;
+    int sock, flags = 1;
     socklen_t addrlen;
     struct sockaddr addr;
     
@@ -539,152 +555,102 @@ void mx_accept_connection(aeEventLoop *eventLoop, int fd, void *data, int mask)
 
 void mx_free_connection(mx_connection_t *conn)
 {
-	aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_READABLE|AE_WRITABLE);
-	close(conn->fd);
-	
-	if (mx_daemon->free_connections_count < MX_FREE_CONNECTIONS_LIST_SIZE) {
-		conn->free_next = mx_daemon->free_connections;
-		mx_daemon->free_connections = conn;
-		mx_daemon->free_connections_count++;
-	} else {
-		free(conn->recvbuf);
-		free(conn->sendbuf);
-		free(conn);
-	}
+    aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_READABLE|AE_WRITABLE);
+    close(conn->fd);
+    
+    if (mx_daemon->free_connections_count < MX_FREE_CONNECTIONS_LIST_SIZE) {
+        conn->free_next = mx_daemon->free_connections;
+        mx_daemon->free_connections = conn;
+        mx_daemon->free_connections_count++;
+    } else {
+        free(conn->recvbuf);
+        free(conn->sendbuf);
+        free(conn);
+    }
 }
 
 mx_connection_t *mx_create_connection(int fd)
 {
-	mx_connection_t *conn;
-	
-	if (mx_daemon->free_connections_count > 0) {
-		conn = mx_daemon->free_connections;
-		mx_daemon->free_connections = conn->free_next;
-		mx_daemon->free_connections_count--;
-	} else {
-		conn = malloc(sizeof(*conn));
-		if (!conn) {
-			return NULL;
-		}
-		
-		conn->recvbuf = malloc(MX_RECVBUF_SIZE);
-		conn->sendbuf = malloc(MX_SENDBUF_SIZE);
-		if (!conn->recvbuf || !conn->sendbuf) {
-			if (conn->recvbuf) free(conn->recvbuf);
-			if (conn->sendbuf) free(conn->sendbuf);
-			free(conn);
-			return NULL;
-		}
-		
-		conn->recvend = conn->recvbuf + MX_RECVBUF_SIZE;
-		conn->sendend = conn->sendbuf + MX_SENDBUF_SIZE;
-	}
-	
-	conn->recvpos = conn->recvbuf;
-	conn->recvlast = conn->recvbuf;
-	conn->sendpos = conn->sendbuf;
-	conn->sendlast = conn->sendbuf;
-	
-	conn->fd = fd;
-	conn->state = mx_event_reading;
-	conn->rev_handler = mx_recv_client_request;
-	conn->wev_handler = NULL;
-	conn->use_queue = NULL;
-	conn->item = NULL;
-	conn->itemptr = NULL;
-	conn->itembytes = 0;
-	
-	if (aeCreateFileEvent(mx_daemon->event, conn->fd, AE_READABLE, mx_process_handler, conn) == -1) {
-		mx_write_log(mx_log_notice, "Unable create file event, client fd(%d)", conn->fd);
-		mx_free_connection(conn);
-		return NULL;
-	}
-	
-	return conn;
-}
-
-void mx_load_aofile()
-{
-	FILE *fp;
-	char buff[2048];
-	char *bptr;
-	mx_token_t tokens[MX_MAX_TOKENS];
-	int tokens_count;
-	mx_list_t *queue;
-	mx_queue_item_t *item;
-	
-	fp = fopen(mx_daemon->loadappendonlyfile, "r");
-	if (!fp) {
-		return;
-	}
-	
-	while ((bptr = fgets(buff, 2048, fp)) != NULL) {
-		tokens_count = mx_tokenize_command(buff, tokens, MX_MAX_TOKENS);
-		if (tokens_count <= 0)
-			break;
-		if (!strcmp(tokens[0].value, "push"))
-		{
-			int item_len = atoi(tokens[3].value);
-			
-			item = malloc(sizeof(*item) + item_len + 2);
-			item->length = item_len;
-			fread(item->data, item_len + 2, 1, fp);
-			
-			if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-				queue = mx_list_create();
-				if (queue) {
-					hash_insert(mx_daemon->table, tokens[1].value, queue);
-				}
-			}
-			
-			if (!queue) {
-				free(item);
-				break;
-			}
-			
-			if (!memcmp(tokens[2].value, "tail", 4)) {
-				mx_list_push_tail(queue, item);
-			} else {
-				mx_list_push(queue, item);
-			}
-		}
-		else if (!strcmp(tokens[0].value, "pop"))
-		{
-			if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == 0) {
-				if (!memcmp(tokens[2].value, "tail", 4)) {
-					item = mx_list_pop_tail(queue);
-				} else {
-					item = mx_list_pop(queue);
-				}
-				if (item) free(item);
-			}
-		} else {
-			break;
-		}
-	}
-	
-	fclose(fp);
+    mx_connection_t *conn;
+    
+    if (mx_daemon->free_connections_count > 0) {
+        conn = mx_daemon->free_connections;
+        mx_daemon->free_connections = conn->free_next;
+        mx_daemon->free_connections_count--;
+    } else {
+        conn = malloc(sizeof(*conn));
+        if (!conn) {
+            return NULL;
+        }
+        
+        conn->recvbuf = malloc(MX_RECVBUF_SIZE);
+        conn->sendbuf = malloc(MX_SENDBUF_SIZE);
+        if (!conn->recvbuf || !conn->sendbuf) {
+            if (conn->recvbuf) free(conn->recvbuf);
+            if (conn->sendbuf) free(conn->sendbuf);
+            free(conn);
+            return NULL;
+        }
+        
+        conn->recvend = conn->recvbuf + MX_RECVBUF_SIZE;
+        conn->sendend = conn->sendbuf + MX_SENDBUF_SIZE;
+    }
+    
+    conn->recvpos = conn->recvbuf;
+    conn->recvlast = conn->recvbuf;
+    conn->sendpos = conn->sendbuf;
+    conn->sendlast = conn->sendbuf;
+    
+    conn->fd = fd;
+    conn->state = mx_event_reading;
+    conn->rev_handler = mx_recv_client_request;
+    conn->wev_handler = NULL;
+    conn->use_queue = NULL;
+    conn->item = NULL;
+    conn->itemptr = NULL;
+    conn->itembytes = 0;
+    
+    if (aeCreateFileEvent(mx_daemon->event, conn->fd, AE_READABLE, mx_process_handler, conn) == -1) {
+        mx_write_log(mx_log_notice, "Unable create file event, client fd(%d)", conn->fd);
+        mx_free_connection(conn);
+        return NULL;
+    }
+    
+    return conn;
 }
 
 int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
 {
-	time(&mx_current_time);
-	if (mx_daemon->openaof) {
-		fflush(mx_daemon->appendonlyfile);
-	}
-	return 100;
+    mx_queue_item_t *item;
+    
+    time(&mx_current_time);
+    
+    while (!mx_skiplist_empty(mx_daemon->delay_queue)) {
+        if (mx_skiplist_find_min(mx_daemon->delay_queue, (void **)&item) != 0) {
+            break;
+        }
+        if (item->delay < mx_current_time) {
+            item->delay = 0;
+            mx_skiplist_insert(item->belong, item->prival, item);
+            mx_skiplist_delete_min(mx_daemon->delay_queue);
+            continue;
+        }
+        break;
+    }
+    
+    return 100;
 }
 
 void mx_init_daemon()
 {
-	struct linger ling = {0, 0};
+    struct linger ling = {0, 0};
     struct sockaddr_in addr;
     int flags = 1;
     
     mx_daemon->log_fd = fopen(mx_daemon->log_file, "a+");
     if (!mx_daemon->log_file) {
-    	fprintf(stderr, "Unable open log file\n");
-    	exit(-1);
+        fprintf(stderr, "Unable open log file\n");
+        exit(-1);
     }
     
     mx_daemon->fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -721,6 +687,7 @@ void mx_init_daemon()
         exit(-1);
     }
     
+    mx_daemon->item_id = 0;
     mx_daemon->free_connections = NULL;
     mx_daemon->free_connections_count = 0;
     
@@ -732,22 +699,20 @@ void mx_init_daemon()
     
     mx_daemon->table = hash_alloc(32);
     if (!mx_daemon->table) {
-    	mx_write_log(mx_log_error, "Unable create HashTable");
+        mx_write_log(mx_log_error, "Unable create HashTable");
+        exit(-1);
+    }
+    
+    mx_daemon->delay_queue = mx_skiplist_create();
+    if (!mx_daemon->table) {
+        mx_write_log(mx_log_error, "Unable create delay queue");
         exit(-1);
     }
     
     if (aeCreateFileEvent(mx_daemon->event, mx_daemon->fd,
             AE_READABLE, mx_accept_connection, NULL) == -1) {
-    	mx_write_log(mx_log_error, "Unable create accpet file event");
-    	exit(-1);
-    }
-    
-    if (mx_daemon->openaof) {
-    	mx_daemon->appendonlyfile = fopen(mx_daemon->appendonlyfilepath, "a+");
-		if (!mx_daemon->appendonlyfile) {
-			mx_write_log(mx_log_error, "Unable open append only file");
-			exit(-1);
-		}
+        mx_write_log(mx_log_error, "Unable create accpet file event");
+        exit(-1);
     }
     
     aeCreateTimeEvent(mx_daemon->event, 1, mx_core_timer, NULL, NULL);
@@ -788,8 +753,6 @@ void mx_usage(void)
     printf("| -d            running at daemonize mode                |\n");
     printf("| -p <port>     bind port number                         |\n");
     printf("| -L <path>     log file path                            |\n");
-    printf("| -f <path>     save data to this append only file       |\n");
-    printf("| -l <path>     load data from this append only file     |\n");
     printf("| -v            print this current version and exit      |\n");
     printf("| -h            print this help and exit                 |\n");
     printf("+--------------------------------------------------------+\n\n");
@@ -798,17 +761,14 @@ void mx_usage(void)
 
 int main(int argc, char **argv)
 {
-	int c;
-	struct rlimit rlim;
+    int c;
+    struct rlimit rlim;
     struct rlimit rlim_new;
     struct sigaction sa;
     
     mx_daemon->port = MX_SERVER_PORT;
-	mx_daemon->daemon_mode = 0;
-	mx_daemon->openaof = 0;
-	mx_daemon->appendonlyfilepath = NULL;
-	mx_daemon->loadappendonlyfile = NULL;
-	mx_daemon->log_file = MX_LOG_FILE;
+    mx_daemon->daemon_mode = 0;
+    mx_daemon->log_file = MX_LOG_FILE;
     
     while ((c = getopt(argc, argv, "p:L:df:l:vh")) != -1) {
         switch (c) {
@@ -819,27 +779,20 @@ int main(int argc, char **argv)
             mx_usage();
             exit(0);
         case 'd':
-        	mx_daemon->daemon_mode = 1;
-        	break;
-        case 'f':
-        	mx_daemon->openaof = 1;
-        	mx_daemon->appendonlyfilepath = strdup(optarg);
-        	break;
-        case 'l':
-        	mx_daemon->loadappendonlyfile = strdup(optarg);
-        	break;
+            mx_daemon->daemon_mode = 1;
+            break;
         case 'p':
-        	mx_daemon->port = atoi(optarg);
-        	break;
+            mx_daemon->port = atoi(optarg);
+            break;
         case 'L':
-        	mx_daemon->log_file = strdup(optarg);
-        	break;
+            mx_daemon->log_file = strdup(optarg);
+            break;
         default:
-        	exit(-1);
+            exit(-1);
         }
     }
     
-	if (getrlimit(RLIMIT_CORE, &rlim)==0) {
+    if (getrlimit(RLIMIT_CORE, &rlim)==0) {
         rlim_new.rlim_cur = rlim_new.rlim_max = RLIM_INFINITY;
         if (setrlimit(RLIMIT_CORE, &rlim_new)!=0) {
             rlim_new.rlim_cur = rlim_new.rlim_max = rlim.rlim_max;
@@ -876,161 +829,118 @@ int main(int argc, char **argv)
     }
     
     if (mx_daemon->daemon_mode)
-	    mx_daemonize();
-	mx_init_daemon();
-	if (mx_daemon->loadappendonlyfile != NULL)
-		mx_load_aofile();
-	aeMain(mx_daemon->event);
-	
-	return 0;
+        mx_daemonize();
+    mx_init_daemon();
+    aeMain(mx_daemon->event);
+    
+    return 0;
 }
 
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-	mx_list_t *queue;
-	mx_queue_item_t *item;
-	int item_len, remain, pushtail;
-	
-	if (tokens[2].length != 4) {
-		mx_send_reply(conn, "-ERR push tail flag invaild");
-		return;
-	}
-	
-	pushtail = memcmp(tokens[2].value, "tail", 4) == 0 ? 1 : 0;
-	
-	item_len = atoi(tokens[3].value);
-	if (item_len <= 0) {
-		mx_send_reply(conn, "-ERR item length invaild");
-		return;
-	}
-	
-	if (tokens[1].length >= 128) {
-		mx_send_reply(conn, "-ERR queue name too long");
-		return;
-	}
-	
-	if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-		queue = mx_list_create();
-		if (queue) {
-			hash_insert(mx_daemon->table, tokens[1].value, queue);
-		}
-	}
-	
-	if (!queue) {
-		mx_send_reply(conn, "-ERR cannot use queue");
-		return;
-	}
-	
-	
-	memcpy(conn->queue_name, tokens[1].value, tokens[1].length);
-	conn->queue_name[tokens[1].length] = '\0';
-	conn->use_queue = queue;
-	
-	item = malloc(sizeof(*item) + item_len + 2);
-	if (!item) {
-		mx_send_reply(conn, "-ERR cannot create queue item");
-		return;
-	}
-	
-	item->length = item_len;
-	conn->item = item;
-	conn->itemptr = item->data;
-	conn->itembytes = item_len + 2;
-	conn->pushtail = pushtail;
-	
-	remain = conn->recvlast - conn->recvpos;
-	if (remain > 0) {
-		int tocpy = remain > item_len + 2 ? item_len + 2 : remain;
-		
-		memcpy(conn->itemptr, conn->recvpos, tocpy);
-		
-		conn->itemptr += tocpy;
-		conn->itembytes -= tocpy;
-		conn->recvpos += tocpy;
-		
-		if (conn->itembytes <= 0) {
-			mx_finish_recv_body(conn);
-			mx_send_reply(conn, "+OK");
-			return;
-		}
-	}
-	conn->rev_handler = mx_recv_client_body;
-	return;
-}
+    mx_skiplist_t *queue;
+    mx_queue_item_t *item;
+    int item_len, remain, prival, delay_time;
+    
+    prival = atoi(tokens[2].value);     /* priority value */
+    delay_time = atoi(tokens[3].value); /* delay time */
+    
+    item_len = atoi(tokens[4].value);
+    if (item_len <= 0) {
+        mx_send_reply(conn, "-ERR item length invaild");
+        return;
+    }
 
-
-void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
-{
-	char buf[128];
-	int len;
-	
-	len = sprintf(buf, "+OK %d\r\n", item->length);
-	memcpy(conn->sendlast, buf, len);
-    conn->sendlast += len;
-	
-	conn->item = item;
-	conn->itemptr = item->data;
-	conn->itembytes = item->length + 2;
-
-    conn->state = mx_event_writing;
-	conn->wev_handler = mx_send_client_body;
-	conn->phase = mx_send_header_phase;
-	
-	aeCreateFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE, mx_process_handler, conn);
+    if (tokens[1].length >= 128) {
+        mx_send_reply(conn, "-ERR queue name too long");
+        return;
+    }
+    
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
+        queue = mx_skiplist_create();
+        if (!queue) {
+            mx_send_reply(conn, "-ERR cannot use queue");
+            return;
+        }
+        hash_insert(mx_daemon->table, tokens[1].value, queue);
+    }
+    conn->use_queue = queue;
+    
+    
+    item = malloc(sizeof(*item) + item_len + 2);
+    if (!item) {
+        mx_send_reply(conn, "-ERR cannot create queue item");
+        return;
+    }
+    
+    item->id = mx_daemon->item_id++;
+    item->prival = prival;
+    item->belong = queue;
+    item->length = item_len;
+    if (delay_time > 0) {
+        item->delay = mx_current_time + delay_time;
+    } else {
+        item->delay = 0;
+    }
+    
+    conn->item = item;
+    conn->itemptr = item->data;
+    conn->itembytes = item_len + 2;
+    
+    remain = conn->recvlast - conn->recvpos;
+    if (remain > 0) {
+        int tocpy = remain > item_len + 2 ? item_len + 2 : remain;
+        
+        memcpy(conn->itemptr, conn->recvpos, tocpy);
+        conn->itemptr += tocpy;
+        conn->itembytes -= tocpy;
+        conn->recvpos += tocpy;
+        
+        if (conn->itembytes <= 0) {
+            mx_finish_recv_body(conn);
+            mx_send_reply(conn, "+OK");
+            return;
+        }
+    }
+    conn->rev_handler = mx_recv_client_body;
+    return;
 }
 
 
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-	mx_list_t *queue;
-	mx_queue_item_t *item;
-	int poptail;
-	
-	if (tokens[2].length != 4) {
-		mx_send_reply(conn, "-ERR pop tail flag invaild");
-		return;
-	}
-	
-	poptail = memcmp(tokens[2].value, "tail", 4) == 0 ? 1 : 0;
-	
-	if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-		mx_send_reply(conn, "-ERR not found queue");
-		return;
-	}
-	
-	if (poptail) {
-		item = mx_list_pop_tail(queue);
-	} else {
-		item = mx_list_pop(queue);
-	}
-	
-	if (item == MX_LIST_NULL) {
-		mx_send_reply(conn, "-ERR the queue was empty");
-		return;
-	}
-	
-	if (mx_daemon->openaof) {
-		fprintf(mx_daemon->appendonlyfile, "%s %s %s\r\n", "pop", tokens[1].value,
-		   (poptail ? "tail" : "head"));
-	}
-	
-	mx_send_item(conn, item);
-	return;
+    mx_skiplist_t *queue;
+    mx_queue_item_t *item;
+
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
+        mx_send_reply(conn, "-ERR not found queue");
+        return;
+    }
+    
+    if (mx_skiplist_find_min(queue, (void **)&item) != SKL_STATUS_OK) {
+        mx_send_reply(conn, "-ERR the queue was empty");
+        return;
+    }
+    
+    mx_send_item(conn, item);
+    mx_skiplist_delete_min(queue);
+    return;
 }
 
-void mx_queuesize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+
+void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
-	mx_list_t *queue;
-	char sndbuf[64];
-	
-	if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-		mx_send_reply(conn, "-ERR not found queue");
-		return;
-	}
-	
-	sprintf(sndbuf, "+OK %d", mx_list_count(queue));
-	mx_send_reply(conn, sndbuf);
-	return;
+    mx_skiplist_t *queue;
+    char sndbuf[64];
+    
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
+        mx_send_reply(conn, "-ERR not found queue");
+        return;
+    }
+    
+    sprintf(sndbuf, "+OK %d", mx_skiplist_elements(queue));
+    mx_send_reply(conn, sndbuf);
+    return;
 }
 

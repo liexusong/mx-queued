@@ -233,6 +233,17 @@ int mx_skiplist_elements(mx_skiplist_t *list)
 }
 
 /**
+ * Return the skiplist is empty
+ */
+int mx_skiplist_empty(mx_skiplist_t *list)
+{
+	if (list && list->elements <= 0) {
+		return 1;
+	}
+	return 0;
+}
+
+/**
  * Create new skiplist
  */
 mx_skiplist_t *mx_skiplist_create()

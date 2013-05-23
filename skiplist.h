@@ -13,7 +13,7 @@ enum SKL_STATUS {
     SKL_STATUS_KEY_NOT_FOUND
 };
 
-/* skiplist_iterator_foreach(iterator, item) */
+
 #define SKIPLIST_ITERATOR_FOREACH(iterator, item)                                            \
         for ((iterator)->current = (iterator)->begin;                                        \
              (iterator)->limit != 0 && (iterator)->current != __ROOT__((iterator)->list) &&  \
@@ -32,6 +32,7 @@ int mx_skiplist_get_iterator(mx_skiplist_t *list,
     mx_skiplist_iterator_t *iterator, int key, int limit);
 int mx_skiplist_level(mx_skiplist_t *list);
 int mx_skiplist_elements(mx_skiplist_t *list);
+int mx_skiplist_empty(mx_skiplist_t *list);
 mx_skiplist_t *mx_skiplist_create();
 
 #endif
