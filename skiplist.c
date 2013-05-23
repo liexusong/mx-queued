@@ -270,3 +270,17 @@ mx_skiplist_t *mx_skiplist_create()
     
     return list;
 }
+
+void mx_skiplist_destroy(mx_skiplist_t *list, void (*destroy_callback)(void *))
+{
+	void *value;
+	
+	while (!mx_skiplist_empty(list)) {
+		mx_skiplist_find_min(list, (void **)&value);
+		mx_skiplist_delete_min(list);
+		if (destroy_callback) {
+			destroy_callback(value);
+		}
+	}
+	zfree(list);
+}

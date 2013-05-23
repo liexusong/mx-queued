@@ -34,5 +34,6 @@ int mx_skiplist_level(mx_skiplist_t *list);
 int mx_skiplist_elements(mx_skiplist_t *list);
 int mx_skiplist_empty(mx_skiplist_t *list);
 mx_skiplist_t *mx_skiplist_create();
+void mx_skiplist_destroy(mx_skiplist_t *list, void (*destroy_callback)(void *));
 
 #endif

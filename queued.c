@@ -54,7 +54,6 @@
 typedef struct mx_connection_s mx_connection_t;
 typedef struct mx_token_s mx_token_t;
 typedef struct mx_queue_item_s mx_queue_item_t;
-typedef mx_skiplist_t mx_queue_t;
 
 typedef enum {
     mx_log_error,
@@ -71,6 +70,12 @@ typedef enum {
     mx_send_header_phase,
     mx_send_body_phase
 } mx_send_item_phase;
+
+typedef struct mx_queue_s {
+    mx_skiplist_t *queue;
+    int  name_len;
+    char name_val[0];
+} mx_queue_t;
 
 struct mx_connection_s {
     int fd;
@@ -133,6 +138,15 @@ struct mx_queue_item_s {
 };
 
 
+/*
+ * Queue API
+ */
+#define mx_queue_ready_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->prival, (item))
+#define mx_queue_delay_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->delay, (item))
+#define mx_queue_fetch_top(_queue, retval) (mx_skiplist_find_min((_queue)->queue, (retval)) == SKL_STATUS_OK)
+#define mx_queue_delete_top(_queue) mx_skiplist_delete_min((_queue)->queue)
+#define mx_queue_size(_queue) mx_skiplist_elements((_queue)->queue)
+
 mx_connection_t *mx_create_connection(int fd);
 void mx_free_connection(mx_connection_t *conn);
 void mx_send_client_response(mx_connection_t *conn);
@@ -185,6 +199,33 @@ void mx_write_log(mx_log_level level, const char *fmt, ...)
     va_end(ap);
 }
 
+
+mx_queue_t *mx_queue_create(char *name, int name_len)
+{
+    mx_queue_t *queue;
+    
+    queue = malloc(sizeof(*queue) + name_len + 1);
+    if (queue) {
+        memcpy(queue->name_val, name, name_len);
+        queue->name_val[name_len] = '\0';
+        queue->name_len = name_len;
+        queue->queue = mx_skiplist_create();
+        if (!queue->queue) {
+            free(queue);
+            return NULL;
+        }
+    }
+    return queue;
+}
+
+
+void mx_queue_free(mx_queue_t *queue)
+{
+    mx_skiplist_destroy(queue->queue, free);
+    free(queue);
+}
+
+
 int mx_set_nonblocking(int fd)
 {
     int flags;
@@ -195,13 +236,22 @@ int mx_set_nonblocking(int fd)
     return 0;
 }
 
+
 void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
 {
     mx_connection_t *conn = (mx_connection_t *)data;
     
     if (conn->fd != fd ||
        (mask == AE_READABLE && conn->state != mx_event_reading) ||
-       (mask == AE_WRITABLE && conn->state != mx_event_writing)) {
+       (mask == AE_WRITABLE && conn->state != mx_event_writing))
+    {
+        if (conn->fd != fd) {
+            mx_write_log(mx_log_notice, "current client socket invalid fd(%d)", conn->fd);
+        } else {
+            int wr = (conn->state == mx_event_reading);
+            mx_write_log(mx_log_notice, "current event invalid, client want [%s] but [%s]",
+                   (wr ? "read" : "write"), (wr ? "write" : "read"));
+        }
         return;
     }
     
@@ -494,9 +544,9 @@ void mx_finish_recv_body(mx_connection_t *conn)
     }
     
     if (conn->item->delay > 0 && conn->item->delay > mx_current_time) {
-        mx_skiplist_insert(mx_daemon->delay_queue, conn->item->delay, conn->item);
+        mx_queue_delay_insert(mx_daemon->delay_queue, conn->item);
     } else {
-        mx_skiplist_insert(conn->use_queue, conn->item->prival, conn->item);
+        mx_queue_ready_insert(conn->use_queue, conn->item);
     }
     
     conn->use_queue = NULL;
@@ -530,6 +580,7 @@ void mx_recv_client_body(mx_connection_t *conn)
         return;
     }
 }
+
 
 void mx_accept_connection(aeEventLoop *eventLoop, int fd, void *data, int mask)
 {
@@ -626,14 +677,14 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
     
     time(&mx_current_time);
     
-    while (!mx_skiplist_empty(mx_daemon->delay_queue)) {
-        if (mx_skiplist_find_min(mx_daemon->delay_queue, (void **)&item) != 0) {
+    while (!mx_skiplist_empty(mx_daemon->delay_queue->queue)) {
+        if (mx_skiplist_find_min(mx_daemon->delay_queue->queue, (void **)&item) != 0) {
             break;
         }
         if (item->delay < mx_current_time) {
             item->delay = 0;
-            mx_skiplist_insert(item->belong, item->prival, item);
-            mx_skiplist_delete_min(mx_daemon->delay_queue);
+            mx_skiplist_insert(item->belong->queue, item->prival, item);
+            mx_skiplist_delete_min(mx_daemon->delay_queue->queue);
             continue;
         }
         break;
@@ -704,7 +755,7 @@ void mx_init_daemon()
         exit(-1);
     }
     
-    mx_daemon->delay_queue = mx_skiplist_create();
+    mx_daemon->delay_queue = mx_queue_create("delay_queue", sizeof("delay_queue") - 1);
     if (!mx_daemon->table) {
         mx_write_log(mx_log_error, "Unable create delay queue");
         exit(-1);
@@ -849,7 +900,7 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     
     item_len = atoi(tokens[4].value);
     if (item_len <= 0) {
-        mx_send_reply(conn, "-ERR item length invaild");
+        mx_send_reply(conn, "-ERR job length invaild");
         return;
     }
 
@@ -859,9 +910,9 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     }
     
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-        queue = mx_skiplist_create();
+        queue = mx_queue_create(tokens[1].value, tokens[1].length);
         if (!queue) {
-            mx_send_reply(conn, "-ERR cannot use queue");
+            mx_send_reply(conn, "-ERR cannot create queue");
             return;
         }
         hash_insert(mx_daemon->table, tokens[1].value, queue);
@@ -871,7 +922,7 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     
     item = malloc(sizeof(*item) + item_len + 2);
     if (!item) {
-        mx_send_reply(conn, "-ERR cannot create queue item");
+        mx_send_reply(conn, "-ERR cannot create job");
         return;
     }
     
@@ -915,17 +966,17 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
     mx_queue_item_t *item;
 
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-        mx_send_reply(conn, "-ERR not found queue");
+        mx_send_reply(conn, "-ERR queue not found");
         return;
     }
     
-    if (mx_skiplist_find_min(queue, (void **)&item) != SKL_STATUS_OK) {
-        mx_send_reply(conn, "-ERR the queue was empty");
+    if (!mx_queue_fetch_top(queue, (void **)&item)) {
+        mx_send_reply(conn, "-ERR queue empty");
         return;
     }
     
     mx_send_item(conn, item);
-    mx_skiplist_delete_min(queue);
+    mx_queue_delete_top(queue);
     return;
 }
 
@@ -936,11 +987,11 @@ void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     char sndbuf[64];
     
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-        mx_send_reply(conn, "-ERR not found queue");
+        mx_send_reply(conn, "-ERR queue not found");
         return;
     }
     
-    sprintf(sndbuf, "+OK %d", mx_skiplist_elements(queue));
+    sprintf(sndbuf, "+OK %d", mx_queue_size(queue));
     mx_send_reply(conn, sndbuf);
     return;
 }
