@@ -14,3 +14,8 @@ The fast message queue server
 
 3) Get the queue size<br />
 <b>qsize</b> &lt;queue-name&gt;\r\n<br />
+
+-------------------------------------------------
+TODO List:
+
+1) 持久化功能.
