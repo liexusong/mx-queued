@@ -138,8 +138,8 @@ struct mx_queue_item_s {
 };
 
 
-#define MX_ITEM_DATA(item) (item)->data
-#define MX_ITEM_SIZE(item) (item)->length
+#define mx_item_data(item) (item)->data
+#define mx_item_size(item) (item)->length
 
 
 /*
@@ -399,7 +399,7 @@ again:
     
     if (conn->recvpos < conn->recvlast) {
         movcnt = conn->recvlast - conn->recvpos;
-        memcpy(conn->recvbuf, conn->recvpos, movcnt);
+        memmove(conn->recvbuf, conn->recvpos, movcnt);
         conn->recvpos = conn->recvbuf;
         conn->recvlast = conn->recvbuf + movcnt;
         goto again;
@@ -629,35 +629,28 @@ void mx_free_connection(mx_connection_t *conn)
 mx_connection_t *mx_create_connection(int fd)
 {
     mx_connection_t *conn;
-    
+
     if (mx_daemon->free_connections_count > 0) {
         conn = mx_daemon->free_connections;
         mx_daemon->free_connections = conn->free_next;
         mx_daemon->free_connections_count--;
     } else {
-        conn = malloc(sizeof(*conn));
+        conn = malloc(sizeof(*conn) + MX_RECVBUF_SIZE + MX_SENDBUF_SIZE);
         if (!conn) {
             return NULL;
         }
         
-        conn->recvbuf = malloc(MX_RECVBUF_SIZE);
-        conn->sendbuf = malloc(MX_SENDBUF_SIZE);
-        if (!conn->recvbuf || !conn->sendbuf) {
-            if (conn->recvbuf) free(conn->recvbuf);
-            if (conn->sendbuf) free(conn->sendbuf);
-            free(conn);
-            return NULL;
-        }
-        
+        conn->recvbuf = (char *)conn + sizeof(*conn);
         conn->recvend = conn->recvbuf + MX_RECVBUF_SIZE;
+        conn->sendbuf = conn->recvend;
         conn->sendend = conn->sendbuf + MX_SENDBUF_SIZE;
     }
-    
+
     conn->recvpos = conn->recvbuf;
     conn->recvlast = conn->recvbuf;
     conn->sendpos = conn->sendbuf;
     conn->sendlast = conn->sendbuf;
-    
+
     conn->fd = fd;
     conn->state = mx_event_reading;
     conn->rev_handler = mx_recv_client_request;
@@ -666,13 +659,13 @@ mx_connection_t *mx_create_connection(int fd)
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
-    
+
     if (aeCreateFileEvent(mx_daemon->event, conn->fd, AE_READABLE, mx_process_handler, conn) == -1) {
         mx_write_log(mx_log_notice, "Unable create file event, client fd(%d)", conn->fd);
         mx_free_connection(conn);
         return NULL;
     }
-    
+
     return conn;
 }
 
@@ -957,8 +950,8 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     mx_daemon->item_id++;
     
     conn->item = item;
-    conn->itemptr = MX_ITEM_DATA(item);
-    conn->itembytes = MX_ITEM_SIZE(item) + 2;
+    conn->itemptr = mx_item_data(item);
+    conn->itembytes = mx_item_size(item) + 2;
     
     remain = conn->recvlast - conn->recvpos;
     if (remain > 0) {
