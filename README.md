@@ -43,12 +43,12 @@ queue_name: 队列的名称<br /><br />
 <br />
 3) 获取队列的长度<br />
 <pre><code>
-  <b>qsize</b> &lt;queue-name&gt;\r\n<br />
+  <b>qsize</b> &lt;queue_name&gt;\r\n<br />
 </code></pre>
 queue_name: 队列的名称<br /><br />
 
 -------------------------------------------------
 TODO List:
 
-1) 持久化功能. (完成)
-2) 定时队列功能.
+* 持久化功能. (完成)
+* 定时队列功能.
