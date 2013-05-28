@@ -233,13 +233,16 @@ int mx_load_queue()
             goto failed;
         }
         
-        if (!(queue = mx_queue_create(tbuf, header.qname_len))) {
-            goto failed;
-        }
-        
         tbuf[header.qname_len] = 0;
-        if (hash_insert(mx_daemon->table, tbuf, queue) != 0) {
-            goto failed;
+        /* find the queue from queue table */
+        if (hash_lookup(mx_daemon->table, tbuf, (void **)&queue) == -1)
+        { /* not found and create it */
+            if (!(queue = mx_queue_create(tbuf, header.qname_len))) {
+                goto failed;
+            }
+            if (hash_insert(mx_daemon->table, tbuf, queue) != 0) {
+                goto failed;
+            }
         }
         
         item = mx_queue_item_create(header.prival, header.delay, queue, header.value_len);
