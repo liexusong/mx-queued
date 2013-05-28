@@ -41,7 +41,7 @@ job_body: job的数据体<br /><br />
 </code></pre>
 queue_name: 队列的名称<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
-date_timer: 指定时间把job放到准备队列中, 格式为：year-mon-day/hour:min:second<br />
+date_timer: 指定时间把job放到准备队列中, 格式为：year-mon-day/hour:min:second, 如：2013-10-12/10:20:30<br />
 job_size: job的大小<br />
 job_body: job的数据体<br /><br />
 
@@ -63,3 +63,4 @@ TODO List:
 
 * 持久化功能. (完成)
 * 定时队列功能. (完成)
+* 客户端可以阻塞获取job.
