@@ -213,8 +213,13 @@ int mx_load_queue()
         return 0;
     }
 
-    if (fread(tbuf, sizeof(MX_BGSAVE_HEADER) - 1, 1, fp) != 1 ||
-        strncmp(tbuf, MX_BGSAVE_HEADER, sizeof(MX_BGSAVE_HEADER) - 1) != 0) {
+    if (fread(tbuf, sizeof(MX_BGSAVE_HEADER) - 1, 1, fp) != 1) {
+        goto failed;
+    }
+    
+    if (strncmp(tbuf, MX_BGSAVE_HEADER, sizeof(MX_BGSAVE_HEADER) - 1) != 0) {
+        mx_write_log(mx_log_debug, "(%s) was a invaild database file", mx_daemon->bgsave_filepath);
+        fclose(fp);
         return -1;
     }
     
@@ -236,7 +241,8 @@ int mx_load_queue()
         tbuf[header.qname_len] = 0;
         /* find the queue from queue table */
         if (hash_lookup(mx_daemon->table, tbuf, (void **)&queue) == -1)
-        { /* not found and create it */
+        {
+            /* not found and create it */
             if (!(queue = mx_queue_create(tbuf, header.qname_len))) {
                 goto failed;
             }
