@@ -24,10 +24,10 @@ The fast message queue server
 <br />
 使用协议:<br />
 1) 添加一个job到队列中:<br />
-<p style="background:#ccc;padding:3px;">
+<pre><code>
   <b>push</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;delay_time&gt; &lt;job_size&gt;\r\n<br />
   &lt;job_body&gt;\r\n<br />
-</p>
+</code></pre>
 queue_name: 队列的名称<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
@@ -35,16 +35,16 @@ job_size: job的大小<br />
 job_body: job的数据体<br /><br />
 
 2) 从队列中获取一个job<br />
-<p style="background:#ccc;padding:3px;">
+<pre><code>
   <b>pop</b> &lt;queue_name&gt;\r\n<br />
-</p>
+</code></pre>
 queue_name: 队列的名称<br /><br />
 
 <br />
 3) 获取队列的长度<br />
-<p style="background:#ccc;padding:3px;">
+<pre><code>
   <b>qsize</b> &lt;queue-name&gt;\r\n<br />
-</p>
+</code></pre>
 queue_name: 队列的名称<br /><br />
 
 -------------------------------------------------
