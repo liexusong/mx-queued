@@ -41,20 +41,6 @@
 #include "queued.h"
 
 
-#define mx_item_data(item) (item)->data
-#define mx_item_size(item) (item)->length
-
-
-/*
- * Queue API
- */
-#define mx_queue_ready_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->prival, (item))
-#define mx_queue_delay_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->delay, (item))
-#define mx_queue_fetch_top(_queue, retval) (mx_skiplist_find_min((_queue)->queue, (retval)) == SKL_STATUS_OK)
-#define mx_queue_delete_top(_queue) mx_skiplist_delete_min((_queue)->queue)
-#define mx_queue_size(_queue) mx_skiplist_elements((_queue)->queue)
-
-
 #define mx_send_reply_return(conn, msg) do {  \
     mx_send_reply((conn), (msg));             \
     return;                                   \
@@ -79,8 +65,8 @@ mx_command_t mx_commands[] = {
 };
 
 
-static mx_daemon_t _mx_daemon, *mx_daemon = &_mx_daemon;
-static time_t mx_current_time;
+mx_daemon_t _mx_daemon, *mx_daemon = &_mx_daemon;
+time_t mx_current_time;
 
 
 void mx_write_log(mx_log_level level, const char *fmt, ...)
@@ -460,6 +446,8 @@ void mx_finish_recv_body(mx_connection_t *conn)
     if (conn->item->delay > 0 && conn->item->delay > mx_current_time) {
         mx_queue_delay_insert(mx_daemon->delay_queue, conn->item);
     } else {
+        if (conn->item->delay > 0)
+            conn->item->delay = 0;
         mx_queue_ready_insert(conn->use_queue, conn->item);
     }
     
@@ -467,6 +455,8 @@ void mx_finish_recv_body(mx_connection_t *conn)
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
+    
+    mx_update_dirty();
 }
 
 void mx_recv_client_body(mx_connection_t *conn)
@@ -490,9 +480,9 @@ void mx_recv_client_body(mx_connection_t *conn)
     
     if (conn->itembytes <= 0) {
         mx_finish_recv_body(conn);
-        mx_send_reply(conn, "+OK");
-        return;
+        mx_send_reply_return(conn, "+OK");
     }
+    return;
 }
 
 
@@ -597,6 +587,8 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         break;
     }
     
+    (void)mx_try_bgsave_queue();
+    
     return 100;
 }
 
@@ -645,9 +637,6 @@ void mx_init_daemon()
         close(mx_daemon->fd);
         exit(-1);
     }
-    
-    mx_daemon->free_connections = NULL;
-    mx_daemon->free_connections_count = 0;
     
     mx_daemon->event = aeCreateEventLoop();
     if (!mx_daemon->event) {
@@ -726,11 +715,9 @@ int mx_set_daemon_handler(char *confval, void *data, int offset)
 
 int mx_set_port_handler(char *confval, void *data, int offset)
 {
-    int port = atol(confval);
-    if (port == 0) {
+    mx_daemon->port = atol(confval);
+    if (mx_daemon->port == 0) {
         mx_daemon->port = MX_SERVER_PORT;
-    } else {
-        mx_daemon->port = port;
     }
     return 1;
 }
@@ -743,10 +730,40 @@ int mx_set_logfile_handler(char *confval, void *data, int offset)
     return 1;
 }
 
+int mx_set_bgsave_filepath_handler(char *confval, void *data, int offset)
+{
+    mx_daemon->bgsave_filepath = strdup(confval);
+    if (!mx_daemon->bgsave_filepath)
+        return 0;
+    return 1;
+}
+
+int mx_set_bgsave_rate_handler(char *confval, void *data, int offset)
+{
+    mx_daemon->bgsave_rate = atoi(confval);
+    if (mx_daemon->bgsave_rate == 0) {
+        mx_daemon->bgsave_rate = 60;
+    }
+    return 1;
+}
+
+int mx_set_changes_todisk_handler(char *confval, void *data, int offset)
+{
+    mx_daemon->changes_todisk = atoi(confval);
+    if (mx_daemon->changes_todisk == 0) {
+        mx_daemon->changes_todisk = 20;
+    }
+    return 1;
+}
+
+
 mx_config_command_t mx_config_commands[] = {
     {"daemon", mx_set_daemon_handler, NULL, 0},
     {"port", mx_set_port_handler, NULL, 0},
-    {"logfile", mx_set_logfile_handler, NULL, 0},
+    {"log_filepath", mx_set_logfile_handler, NULL, 0},
+    {"bgsave_filepath", mx_set_bgsave_filepath_handler, NULL, 0},
+    {"bgsave_rate", mx_set_bgsave_rate_handler, NULL, 0},
+    {"changes_todisk", mx_set_changes_todisk_handler, NULL, 0},
     {NULL, NULL, NULL, 0}
 };
 
@@ -934,6 +951,24 @@ void mx_usage(void)
     return;
 }
 
+void mx_init_main()
+{
+    mx_daemon->port = MX_SERVER_PORT;
+    mx_daemon->daemon_mode = 0;
+    mx_daemon->conf_file = NULL;
+    mx_daemon->log_file = MX_LOG_FILE;
+    /* support to persistence feature */
+    mx_daemon->bgsave_filepath = NULL;
+    mx_daemon->bgsave_pid = -1;
+    mx_daemon->last_bgsave_time = time(NULL);
+    mx_daemon->bgsave_rate = 0;
+    mx_daemon->changes_todisk = 0;
+    mx_daemon->dirty = 0;
+
+    mx_daemon->free_connections = NULL;
+    mx_daemon->free_connections_count = 0;
+}
+
 int main(int argc, char **argv)
 {
     int c;
@@ -941,10 +976,7 @@ int main(int argc, char **argv)
     struct rlimit rlim_new;
     struct sigaction sa;
     
-    mx_daemon->port = MX_SERVER_PORT;
-    mx_daemon->daemon_mode = 0;
-    mx_daemon->conf_file = NULL;
-    mx_daemon->log_file = MX_LOG_FILE;
+    mx_init_main();
     
     while ((c = getopt(argc, argv, "p:L:dc:vh")) != -1) {
         switch (c) {
@@ -1012,6 +1044,7 @@ int main(int argc, char **argv)
     if (mx_daemon->daemon_mode)
         mx_daemonize();
     mx_init_daemon();
+    mx_load_queue();
     aeMain(mx_daemon->event);
 
     return 0;
@@ -1063,8 +1096,7 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     job_length = atoi(tokens[4].value);
     
     if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
-        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG)))
-    {
+        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
         mx_send_reply_return(conn, msg);
     }
 
@@ -1112,6 +1144,7 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
         mx_send_reply_return(conn, MX_QUEUE_EMPTY);
     mx_send_item(conn, item);
     mx_queue_delete_top(queue);
+    mx_update_dirty();
     return;
 }
 

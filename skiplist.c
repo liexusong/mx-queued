@@ -15,25 +15,6 @@
 
 #define MAXLEVEL 32
 
-struct mx_skiplist_node_s {
-    int   key;
-    void *rec;
-    mx_skiplist_node_t *forward[1];
-};
-
-struct mx_skiplist_s {
-    mx_skiplist_node_t *root;
-    int listLevel;
-    int elements;
-};
-
-struct mx_skiplist_iterator_s {
-    mx_skiplist_t *list;
-    mx_skiplist_node_t *begin;
-    mx_skiplist_node_t *current;
-    int limit;
-};
-
 
 /**
  * Insert new node into skiplist

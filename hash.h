@@ -30,17 +30,18 @@
 #ifndef HASH_H
 #define HASH_H
 
+#include "list.h"
+
 typedef unsigned long int ub4;
-typedef unsigned     char ub1;
+typedef unsigned char ub1;
 
 typedef struct sHashNode  HashNode;
 typedef struct sHashTable HashTable;
 typedef struct sHashKey   HashKey;
 
 struct sHashNode {
+	struct list_head list;
 	HashNode	*next;
-	HashNode    *lprev;
-	HashNode    *lnext;
 	void		*value;
 	ub4			h;
 	int			keyLength;
@@ -51,8 +52,7 @@ struct sHashTable {
 	unsigned int size;
 	unsigned int used;
 	HashNode **bucket;
-	HashNode *head;
-	HashNode *tail;
+	struct list_head list;
 };
 
 struct sHashKey {
@@ -61,14 +61,16 @@ struct sHashKey {
 };
 
 typedef void (*hash_destroy_function)(void *);
+typedef int (*hash_foreach_handler)(char *key, int keyLength, void *value);
 
 HashTable *hash_alloc(int size);
 int hash_insert(HashTable *htb, char *key, void *value);
+int hash_insert_bykey(HashTable *htb, HashKey *key, void *value);
 int hash_lookup(HashTable *htb, char *key, void **retval);
 int hash_replace(HashTable *htb, char *key, void *nvalue, void **retval);
 int hash_remove(HashTable *htb, char *key, void **retval);
 void hash_destroy(HashTable *htb, hash_destroy_function destroy);
 void hash_try_resize(HashTable *htb);
-void hash_foreach_callback(HashTable *htb, void (*handler)(char *, int, void *));
+int hash_foreach(HashTable *htb, hash_foreach_handler handler);
 
 #endif

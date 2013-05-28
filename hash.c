@@ -32,26 +32,26 @@
 #include "hash.h"
 
 static unsigned int tableSize[] = {
-	7,			13,			31,			61,			127,		251,
-	509,		1021,		2039,		4093,		8191,		16381,
-	32749,		65521,		131071,		262143, 	524287, 	1048575,
-	2097151,	4194303,	8388607,	16777211,	33554431,	67108863,
-	134217727,	268435455,	536870911,	1073741823,	2147483647,	0
+    7,          13,         31,         61,         127,        251,
+    509,        1021,       2039,       4093,       8191,       16381,
+    32749,      65521,      131071,     262143,     524287,     1048575,
+    2097151,    4194303,    8388607,    16777211,   33554431,   67108863,
+    134217727,  268435455,  536870911,  1073741823, 2147483647, 0
 };
 
 static void hash_resize(HashTable *old);
 
-#define mix(a,b,c) \
-{\
-  a -= b; a -= c; a ^= (c>>13);	\
-  b -= c; b -= a; b ^= (a<<8);	\
-  c -= a; c -= b; c ^= (b>>13);	\
-  a -= b; a -= c; a ^= (c>>12);	\
-  b -= c; b -= a; b ^= (a<<16);	\
-  c -= a; c -= b; c ^= (b>>5);	\
-  a -= b; a -= c; a ^= (c>>3);	\
-  b -= c; b -= a; b ^= (a<<10);	\
-  c -= a; c -= b; c ^= (b>>15);	\
+#define mix(a,b,c)                \
+{                                 \
+  a -= b; a -= c; a ^= (c>>13);   \
+  b -= c; b -= a; b ^= (a<<8);    \
+  c -= a; c -= b; c ^= (b>>13);   \
+  a -= b; a -= c; a ^= (c>>12);   \
+  b -= c; b -= a; b ^= (a<<16);   \
+  c -= a; c -= b; c ^= (b>>5);    \
+  a -= b; a -= c; a ^= (c>>3);    \
+  b -= c; b -= a; b ^= (a<<10);   \
+  c -= a; c -= b; c ^= (b>>15);   \
 }
 
 /*
@@ -128,222 +128,203 @@ ub4 hash( k, length, initval )
 }
 
 HashTable *hash_alloc(int size) {
-	HashTable *htb;
-	
-	htb = (HashTable *)malloc(sizeof(HashTable));
-	if (!htb) {
-		return NULL;
-	}
-	
-	htb->size = htb->used = 0;
-	
-	while (tableSize[htb->size] < size) {
-		htb->size++;
-		if (tableSize[htb->size] == 0) {
-			htb->size--;
-			break;
-		}
-	}
-	
-	htb->bucket = (HashNode **)malloc(tableSize[htb->size] * sizeof(HashNode *));
-	if (!htb->bucket) {
-		free(htb);
-		return NULL;
-	}
-	
-	memset(htb->bucket, 0, tableSize[htb->size] * sizeof(HashNode *));
-	
-	htb->head = htb->tail = NULL;
-	
-	return htb;
+    HashTable *htb;
+    
+    htb = (HashTable *)malloc(sizeof(HashTable));
+    if (!htb) {
+        return NULL;
+    }
+    
+    htb->size = htb->used = 0;
+    
+    while (tableSize[htb->size] < size) {
+        htb->size++;
+        if (tableSize[htb->size] == 0) {
+            htb->size--;
+            break;
+        }
+    }
+    
+    htb->bucket = (HashNode **)malloc(tableSize[htb->size] * sizeof(HashNode *));
+    if (!htb->bucket) {
+        free(htb);
+        return NULL;
+    }
+    
+    memset(htb->bucket, 0, tableSize[htb->size] * sizeof(HashNode *));
+    
+    INIT_LIST_HEAD(&htb->list);
+    
+    return htb;
 }
 
-#define HASH_LINK(htb, node) do {      \
-	(node)->lprev = (htb)->tail;       \
-	if ((htb)->tail) {                 \
-		(htb)->tail->lnext = (node);   \
-	}                                  \
-	(htb)->tail = (node);              \
-	if (!(htb)->head) {                \
-		(htb)->head = (node);          \
-	}                                  \
-} while(0)
 
 int hash_insert(HashTable *htb, char *key, void *value) {
-	int slen;
-	ub4 h, index;
-	HashNode *node;
-	
-	slen = strlen(key);
-	
-	node = (HashNode *)calloc(1, sizeof(HashNode) + slen + 1);
-	if (!node) {
-		return -1;
-	}
-	
-	h = hash(key, slen, 0);
-	index = h % tableSize[htb->size];
+    int slen;
+    ub4 h, index;
+    HashNode *node;
+    
+    slen = strlen(key);
+    
+    node = (HashNode *)calloc(1, sizeof(HashNode) + slen + 1);
+    if (!node) {
+        return -1;
+    }
+    
+    h = hash(key, slen, 0);
+    index = h % tableSize[htb->size];
 
-	node->h = h;
-	node->value = value;
-	node->keyLength = slen;
-	memcpy(node->key, key, node->keyLength);
-	node->key[node->keyLength] = '\0';
-	
-	node->next = htb->bucket[index];
-	htb->bucket[index] = node;
-	
-	HASH_LINK(htb, node);
-	
-	htb->used++;
-	
-	return 0;
+    node->h = h;
+    node->value = value;
+    node->keyLength = slen;
+    memcpy(node->key, key, node->keyLength);
+    node->key[node->keyLength] = '\0';
+    
+    node->next = htb->bucket[index];
+    htb->bucket[index] = node;
+    
+    list_add_tail(&node->list, &htb->list);
+    
+    htb->used++;
+    
+    hash_try_resize(htb);
+    
+    return 0;
 }
 
-int hash_insert_by_key(HashTable *htb, HashKey *key, void *value) {
-	ub4 h, index;
-	HashNode *node;
-	
-	node = (HashNode *)calloc(1, sizeof(HashNode) + key->keyLength + 1);
-	if (!node) {
-		return -1;
-	}
-	
-	h = hash(key, key->keyLength, 0);
-	index = h % tableSize[htb->size];
+int hash_insert_bykey(HashTable *htb, HashKey *key, void *value) {
+    ub4 h, index;
+    HashNode *node;
+    
+    node = (HashNode *)calloc(1, sizeof(HashNode) + key->keyLength + 1);
+    if (!node) {
+        return -1;
+    }
+    
+    h = hash(key, key->keyLength, 0);
+    index = h % tableSize[htb->size];
 
-	node->h = h;
-	node->value = value;
-	node->keyLength = key->keyLength;
-	memcpy(node->key, key->key, key->keyLength);
-	node->key[key->keyLength] = '\0';
-	
-	node->next = htb->bucket[index];
-	htb->bucket[index] = node;
-	
-	HASH_LINK(htb, node);
-	
-	htb->used++;
-	
-	return 0;
+    node->h = h;
+    node->value = value;
+    node->keyLength = key->keyLength;
+    memcpy(node->key, key->key, key->keyLength);
+    node->key[key->keyLength] = '\0';
+    
+    node->next = htb->bucket[index];
+    htb->bucket[index] = node;
+    
+    list_add_tail(&node->list, &htb->list);
+    
+    htb->used++;
+    
+    hash_try_resize(htb);
+    
+    return 0;
 }
 
 int hash_lookup(HashTable *htb, char *key, void **retval) {
-	ub4 index;
-	HashNode *node;
-	
-	index = hash(key, strlen(key), 0) % tableSize[htb->size];
-	
-	node = htb->bucket[index];
-	while (node && strncmp(node->key, key, node->keyLength)) {
-		node = node->next;
-	}
-	
-	if (!node) {
-		*retval = (void *)NULL;
-		return -1;
-	} else {
-		*retval = node->value;
-		return 0;
-	}
+    ub4 index;
+    HashNode *node;
+    
+    index = hash(key, strlen(key), 0) % tableSize[htb->size];
+    
+    node = htb->bucket[index];
+    while (node && strncmp(node->key, key, node->keyLength)) {
+        node = node->next;
+    }
+    
+    if (!node) {
+        *retval = (void *)NULL;
+        return -1;
+    } else {
+        *retval = node->value;
+        return 0;
+    }
 }
 
 int hash_replace(HashTable *htb, char *key, void *nvalue, void **retval) {
-	ub4 index;
-	HashNode *node;
-	
-	index = hash(key, strlen(key), 0) % tableSize[htb->size];
-	
-	node = htb->bucket[index];
-	while (node && strncmp(node->key, key, node->keyLength)) {
-		node = node->next;
-	}
-	
-	if (!node) {
-		*retval = (void *)NULL;
-		return -1;
-	} else {
-		*retval = node->value;
-		node->value = nvalue;
-		return 0;
-	}
+    ub4 index;
+    HashNode *node;
+    
+    index = hash(key, strlen(key), 0) % tableSize[htb->size];
+    
+    node = htb->bucket[index];
+    while (node && strncmp(node->key, key, node->keyLength)) {
+        node = node->next;
+    }
+    
+    if (!node) {
+        *retval = (void *)NULL;
+        return -1;
+    } else {
+        *retval = node->value;
+        node->value = nvalue;
+        return 0;
+    }
 }
 
 
-#define HASH_UNLINK(htb, node) do {             \
-	if ((node)->lprev) {                        \
-		(node)->lprev->lnext = (node)->lnext;   \
-	} else {                                    \
-		(htb)->head = (node)->lnext;            \
-	}                                           \
-	if ((node)->lnext) {                        \
-		(node)->lnext->lprev = (node)->lprev;   \
-	} else {                                    \
-		(htb)->tail = (node)->lprev;            \
-	}                                           \
-	if ((htb)->head) (htb)->head->lprev = NULL; \
-	if ((htb)->tail) (htb)->tail->lnext = NULL; \
-} while(0)
-
 int hash_remove(HashTable *htb, char *key, void **retval) {
-	ub4 index;
-	HashNode *node, *prev;
-	
-	index = hash(key, strlen(key), 0) % tableSize[htb->size];
-	
-	prev = NULL;
-	node = htb->bucket[index];
-	while (node && strncmp(node->key, key, node->keyLength)) {
-		prev = node;
-		node = node->next;
-	}
-	
-	if (!node) {
-		*retval = (void *)NULL;
-		return -1;
-	}
-	
-	HASH_UNLINK(htb, node);
-	
-	*retval = node->value;
-	if (!prev) {
-		htb->bucket[index] = node->next;
-	} else {
-		prev->next = node->next;
-	}
-	free(node);
-	
-	htb->used--;
-	return 0;
+    ub4 index;
+    HashNode *node, *prev;
+    
+    index = hash(key, strlen(key), 0) % tableSize[htb->size];
+    
+    prev = NULL;
+    node = htb->bucket[index];
+    while (node && strncmp(node->key, key, node->keyLength)) {
+        prev = node;
+        node = node->next;
+    }
+    
+    if (!node) {
+        *retval = (void *)NULL;
+        return -1;
+    }
+    
+    list_del(&node->list);
+    
+    *retval = node->value;
+    if (!prev) {
+        htb->bucket[index] = node->next;
+    } else {
+        prev->next = node->next;
+    }
+    free(node);
+    
+    htb->used--;
+    return 0;
 }
 
 void hash_destroy(HashTable *htb, hash_destroy_function destroy) {
-	HashNode *node, *next;
-	int i;
-	
-	for (i = 0; i < tableSize[htb->size]; i++) {
-		node = htb->bucket[i];
-		while (node) {
-			next = node->next;
-			destroy(node->value);
-			free(node);
-			node = next;
-		}
-	}
-	free(htb);
-	
-	return;
+    HashNode *node, *next;
+    int i;
+    
+    for (i = 0; i < tableSize[htb->size]; i++) {
+        node = htb->bucket[i];
+        while (node) {
+            next = node->next;
+            destroy(node->value);
+            free(node);
+            node = next;
+        }
+    }
+    free(htb);
+    
+    return;
 }
 
 void hash_try_resize(HashTable *htb) {
-	if (htb->used >= tableSize[htb->size]) {
-		hash_resize(htb);
-	}
-	return;
+    int limit = tableSize[htb->size] * 0.8;
+    
+    if (htb->used >= limit) {
+        hash_resize(htb);
+    }
+    return;
 }
 
 static void hash_resize(HashTable *h_old) {
-	HashTable ht;
+    HashTable ht;
     int i;
 
     ht.used = h_old->used;
@@ -355,42 +336,45 @@ static void hash_resize(HashTable *h_old) {
     
     ht.bucket = (HashNode **)malloc(sizeof(HashNode *) * tableSize[ht.size]);
     if (ht.bucket == NULL) {
-    	return;
+        return;
     }
     
     memset(ht.bucket, 0, sizeof(HashNode *) * tableSize[ht.size]);
 
     for (i = 0; i < tableSize[h_old->size]; i++) {
-		HashNode *e = h_old->bucket[i];
-		HashNode *next_e;
-		
-		while (e) {
-			unsigned int index = e->h % tableSize[ht.size];
-		    
-		    next_e = e->next;
-		    
-		    e->next = ht.bucket[index];
-		    ht.bucket[index] = e;
-		    
-		    e = next_e;
-		}
+        HashNode *e = h_old->bucket[i];
+        HashNode *next_e;
+        
+        while (e) {
+            unsigned int index = e->h % tableSize[ht.size];
+            
+            next_e = e->next;
+            
+            e->next = ht.bucket[index];
+            ht.bucket[index] = e;
+            
+            e = next_e;
+        }
     }
-	free(h_old->bucket);
+    free(h_old->bucket);
 
-	h_old->bucket = ht.bucket;
-	h_old->size = ht.size;
-	
-	return;
-}
-
-void hash_foreach_callback(HashTable *htb, void (*handler)(char *, int, void *)) {
-	HashNode *node;
-	
-	for (node = htb->head; node; node = node->lnext) {
-		handler(node->key, node->keyLength, node->value);
-	}
-	return;
+    h_old->bucket = ht.bucket;
+    h_old->size = ht.size;
+    
+    return;
 }
 
 
+int hash_foreach(HashTable *htb, hash_foreach_handler handler) {
+    struct list_head *position;
+    HashNode *node;
+    
+    list_for_each(position, &htb->list) {
+        node = list_entry(position, HashNode, list);
+        if (handler(node->key, node->keyLength, node->value) == -1) {
+            return -1;
+        }
+    }
+    return 0;
+}
 
