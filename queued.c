@@ -645,7 +645,7 @@ void mx_init_daemon()
 
     mx_daemon->log_fd = fopen(mx_daemon->log_file, "a+");
     if (!mx_daemon->log_file) {
-        fprintf(stderr, "Failed to open log file\n");
+        fprintf(stderr, "[failed] failed to open log file\n");
         exit(-1);
     }
 
@@ -911,7 +911,7 @@ void mx_config_parse_line(char *line)
             if (*temp == '=') {
                 MX_CONFIG_SET_STATE(mx_config_state_want_value);
             } else if (!MX_CONFIG_IS_SPACE(*temp)) {
-                fprintf(stderr, "[FAILED] line `%s' invaild.\n", line);
+                fprintf(stderr, "[failed] line `%s' invaild.\n", line);
                 exit(-1);
             }
             break;
@@ -951,7 +951,7 @@ void mx_config_parse_line(char *line)
             }
             break;
         default:
-            fprintf(stderr, "[FAILED] line `%s' invaild.\n", line);
+            fprintf(stderr, "[failed] line `%s' invaild.\n", line);
             exit(-1);
             break;
         }
@@ -959,18 +959,18 @@ void mx_config_parse_line(char *line)
 
 enter:
     if (!found) {
-        fprintf(stderr, "[FAILED] line `%s' invaild.\n", line);
+        fprintf(stderr, "[failed] line `%s' invaild.\n", line);
         exit(-1);
     }
     
     cmd = mx_config_find_command(keyptr);
     if (!cmd) {
-        fprintf(stderr, "[FAILED] not found configure item `%s'.\n", keyptr);
+        fprintf(stderr, "[failed] not found configure item `%s'.\n", keyptr);
         exit(-1);
     }
     
     if (!cmd->handler(valptr, cmd->data, cmd->offset)) {
-        fprintf(stderr, "[FAILED] set configure item `%s' failed.\n", keyptr);
+        fprintf(stderr, "[failed] set configure item `%s' failed.\n", keyptr);
         exit(-1);
     }
     
@@ -984,7 +984,7 @@ int mx_config_read_file(const char *file)
     
     fp = fopen(file, "r");
     if (!fp) {
-        fprintf(stderr, "[DEBUG] not found configure file `%s', please check it.\n", file);
+        fprintf(stderr, "[notice] not found configure file `%s', please check it.\n", file);
         return -1;
     }
     
@@ -1083,12 +1083,12 @@ int main(int argc, char **argv)
     }
 
     if ((getrlimit(RLIMIT_CORE, &rlim)!=0) || rlim.rlim_cur==0) {
-        fprintf(stderr, "Unable ensure corefile creation\n");
+        fprintf(stderr, "[failed] Unable ensure corefile creation\n");
         exit(-1);
     }
     
     if (getrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-        fprintf(stderr, "Unable getrlimit number of files\n");
+        fprintf(stderr, "[failed] Unable getrlimit number of files\n");
         exit(-1);
     } else {
         int maxfiles = 1024;
@@ -1097,7 +1097,7 @@ int main(int argc, char **argv)
         if (rlim.rlim_max < rlim.rlim_cur)
             rlim.rlim_max = rlim.rlim_cur;
         if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-            fprintf(stderr, "Unable set rlimit for open files. "
+            fprintf(stderr, "[failed] Unable set rlimit for open files. "
                 "Try running as root or requesting smaller maxconns value\n");
             exit(-1);
         }
@@ -1106,12 +1106,14 @@ int main(int argc, char **argv)
     sa.sa_handler = SIG_IGN;
     sa.sa_flags = 0;
     if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1) {
-        fprintf(stderr, "Unable ignore SIGPIPE\n");
+        fprintf(stderr, "[failed] Unable ignore SIGPIPE\n");
         exit(-1);
     }
     
     if (mx_daemon->conf_file)
         mx_config_read_file(mx_daemon->conf_file); /* read configure file */
+    else
+        fprintf(stderr, "[notice] not found configure file and use default setting.\n");
     if (mx_daemon->daemon_mode)
         mx_daemonize();
     mx_init_daemon();
