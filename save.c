@@ -60,7 +60,7 @@ int mx_save_ready_queue(char *queue_name, int name_length, void *data)
     mx_queue_t *queue = (mx_queue_t *)data;
     mx_skiplist_node_t *root, *node;
     
-    root = node = queue->queue->root;
+    root = node = queue->list->root;
     while (node->forward[0] != root) {
         node = node->forward[0];
         
@@ -75,7 +75,7 @@ int mx_save_delay_queue()
 {
     mx_skiplist_node_t *root, *node;
     
-    root = node = mx_daemon->delay_queue->queue->root;
+    root = node = mx_daemon->delay_queue->list->root;
     while (node->forward[0] != root) {
         node = node->forward[0];
         
@@ -209,7 +209,7 @@ int mx_load_queue()
     time_t current_time = time(NULL);
     int count = 0;
     
-    if (!mx_daemon->bgsave_filepath || !(fp = fopen(mx_daemon->bgsave_filepath, "r"))) {
+    if (!mx_daemon->bgsave_filepath || !(fp = fopen(mx_daemon->bgsave_filepath, "rb"))) {
         return 0;
     }
 
@@ -264,11 +264,11 @@ int mx_load_queue()
         item->data[item->length+1] = '\n';
         
         if (item->delay > 0 && item->delay > current_time) {
-            mx_queue_delay_insert(mx_daemon->delay_queue, item);
+            mx_queue_insert(mx_daemon->delay_queue, item->delay, item);
         } else {
             if (item->delay > 0)
                 item->delay = 0;
-            mx_queue_ready_insert(queue, item);
+            mx_queue_insert(queue, item->prival, item);
         }
         count++;
     }
@@ -282,3 +282,4 @@ failed:
     fclose(fp);
     return -1;
 }
+

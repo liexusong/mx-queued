@@ -13,7 +13,6 @@
 #define MX_SENDBUF_SIZE 2048
 #define MX_FREE_CONNECTIONS_LIST_SIZE 1000
 
-
 #ifndef offsetof
 #define offsetof(type, member) ((size_t)&((type *)0)->member)
 #endif
@@ -26,7 +25,6 @@
 
 
 typedef struct mx_connection_s mx_connection_t;
-typedef struct mx_token_s mx_token_t;
 typedef struct mx_queue_item_s mx_queue_item_t;
 
 typedef enum {
@@ -35,21 +33,34 @@ typedef enum {
     mx_log_debug
 } mx_log_level;
 
-typedef enum {
-    mx_event_reading,
-    mx_event_writing
-} mx_event_state;
 
 typedef enum {
     mx_send_header_phase,
     mx_send_body_phase
 } mx_send_item_phase;
 
+
+typedef enum {
+    mx_event_reading,
+    mx_event_writing
+} mx_event_state;
+
+
 typedef struct mx_queue_s {
-    mx_skiplist_t *queue;
+    mx_skiplist_t *list;
     int  name_len;
     char name_val[0];
 } mx_queue_t;
+
+
+struct mx_queue_item_s {
+    int prival;
+    int delay;
+    mx_queue_t *belong;
+    int length;
+    char data[0];
+};
+
 
 struct mx_connection_s {
     int fd;
@@ -64,7 +75,6 @@ struct mx_connection_s {
     char *sendend;
     void (*rev_handler)(mx_connection_t *conn);
     void (*wev_handler)(mx_connection_t *conn);
-    mx_queue_t *use_queue;
     mx_queue_item_t *item;
     char *itemptr;
     int itembytes;
@@ -95,40 +105,16 @@ typedef struct mx_daemon_s {
 } mx_daemon_t;
 
 
-struct mx_token_s {
-    char  *value;
-    size_t length;
-};
-
-
-typedef struct mx_command_s {
-    char *name;
-    int name_len;
-    int argcnt;
-    void (*handler)(mx_connection_t *, mx_token_t *, int);
-} mx_command_t;
-
-
-struct mx_queue_item_s {
-    int prival;
-    int delay;
-    mx_queue_t *belong;
-    int length;
-    char data[0];
-};
-
-
 extern mx_daemon_t *mx_daemon;
 extern time_t mx_current_time;
 
 /*
  * Queue API
  */
-#define mx_queue_ready_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->prival, (item))
-#define mx_queue_delay_insert(_queue, item) mx_skiplist_insert((_queue)->queue, (item)->delay, (item))
-#define mx_queue_fetch_top(_queue, retval) (mx_skiplist_find_min((_queue)->queue, (retval)) == SKL_STATUS_OK)
-#define mx_queue_delete_top(_queue) mx_skiplist_delete_min((_queue)->queue)
-#define mx_queue_size(_queue) mx_skiplist_elements((_queue)->queue)
+#define mx_queue_insert(queue, key, item)     mx_skiplist_insert((queue)->list, (key), (item))
+#define mx_queue_fetch_head(queue, retval)   (mx_skiplist_find_min((queue)->list, (retval)) == SKL_STATUS_OK)
+#define mx_queue_delete_head(queue)           mx_skiplist_delete_min((queue)->list)
+#define mx_queue_size(queue)                  mx_skiplist_elements((queue)->list)
 
 void mx_write_log(mx_log_level level, const char *fmt, ...);
 mx_queue_t *mx_queue_create(char *name, int name_len);

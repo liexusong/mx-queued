@@ -40,6 +40,20 @@
 
 #include "queued.h"
 
+typedef struct mx_token_s mx_token_t;
+
+struct mx_token_s {
+    char  *value;
+    size_t length;
+};
+
+typedef struct mx_command_s {
+    char *name;
+    int name_len;
+    int argcnt;
+    void (*handler)(mx_connection_t *, mx_token_t *, int);
+} mx_command_t;
+
 
 #define mx_send_reply_return(conn, msg) do {  \
     mx_send_reply((conn), (msg));             \
@@ -53,6 +67,7 @@ void mx_send_client_response(mx_connection_t *conn);
 void mx_recv_client_request(mx_connection_t *conn);
 void mx_send_client_body(mx_connection_t *conn);
 
+
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
@@ -65,7 +80,11 @@ mx_command_t mx_commands[] = {
 };
 
 
-mx_daemon_t _mx_daemon, *mx_daemon = &_mx_daemon;
+/* static variables */
+static mx_daemon_t mx_daemon_static;
+
+/* extern variables */
+mx_daemon_t *mx_daemon = &mx_daemon_static;
 time_t mx_current_time;
 
 
@@ -97,6 +116,7 @@ void mx_write_log(mx_log_level level, const char *fmt, ...)
     fprintf(fp, "\n");
     fflush(fp);
     va_end(ap);
+    return;
 }
 
 
@@ -105,12 +125,16 @@ mx_queue_t *mx_queue_create(char *name, int name_len)
     mx_queue_t *queue;
     
     queue = malloc(sizeof(*queue) + name_len + 1);
-    if (queue) {
+    if (queue)
+    {
+        /* save queue name */
         memcpy(queue->name_val, name, name_len);
-        queue->name_val[name_len] = '\0';
+        queue->name_val[name_len] = 0;
         queue->name_len = name_len;
-        queue->queue = mx_skiplist_create();
-        if (!queue->queue) {
+        
+        /* create queue list */
+        queue->list = mx_skiplist_create();
+        if (!queue->list) {
             free(queue);
             return NULL;
         }
@@ -121,8 +145,9 @@ mx_queue_t *mx_queue_create(char *name, int name_len)
 
 void mx_queue_free(mx_queue_t *queue)
 {
-    mx_skiplist_destroy(queue->queue, free);
+    mx_skiplist_destroy(queue->list, free);
     free(queue);
+    return;
 }
 
 
@@ -143,13 +168,13 @@ void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
     
     if (conn->fd != fd ||
        (mask == AE_READABLE && conn->state != mx_event_reading) ||
-       (mask == AE_WRITABLE && conn->state != mx_event_writing))
-    {
+       (mask == AE_WRITABLE && conn->state != mx_event_writing)) {
         if (conn->fd != fd) {
             mx_write_log(mx_log_notice, "current client socket invalid fd(%d)", conn->fd);
         } else {
             int wr = (conn->state == mx_event_reading);
-            mx_write_log(mx_log_notice, "current event invalid, client want [%s] but [%s]",
+            mx_write_log(mx_log_notice,
+                   "current event invalid, client want [%s] but [%s]",
                    (wr ? "read" : "write"), (wr ? "write" : "read"));
         }
         return;
@@ -172,6 +197,11 @@ void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
 }
 
 
+/*
+ * Send reply to client conneciton
+ * @param conn, client connection
+ * @param str, send to client connection data
+ */
 void mx_send_reply(mx_connection_t *conn, char *str)
 {
     int len;
@@ -194,6 +224,11 @@ void mx_send_reply(mx_connection_t *conn, char *str)
 }
 
 
+/*
+ * Send job item to client connection
+ * @param conn, client connection
+ * @param item, job item which send to client connection
+ */
 void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
 {
     char buf[128];
@@ -215,6 +250,10 @@ void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
 }
 
 
+/*
+ * Find client command called
+ * @todo use HashTable instead of list
+ */
 mx_command_t *mx_find_command(char *name, int len)
 {
     mx_command_t *cmd;
@@ -249,7 +288,7 @@ size_t mx_tokenize_command(char *command, mx_token_t *tokens, size_t max_tokens)
                 ntokens++;
             }
 
-            break; /* string end */
+            break; /* str end */
         }
     }
 
@@ -276,29 +315,30 @@ again:
         eline--;
     *eline = '\0';
 
+#if 0
     memset(tokens, 0, sizeof(tokens));
-    
+#endif
+
     tokens_count = mx_tokenize_command(bline, tokens, MX_MAX_TOKENS);
     if (tokens_count == 0) {
-        mx_send_reply(conn, "-ERR command invaild");
-        return;
+        mx_send_reply_return(conn, "-ERR command invaild");
     }
     
     cmd = mx_find_command(tokens[0].value, tokens[0].length);
     if (!cmd->name || cmd->argcnt != tokens_count) {
-        mx_send_reply(conn, "-ERR command invaild");
-        return;
+        mx_send_reply_return(conn, "-ERR command not found");
     }
     
     cmd->handler(conn, tokens, tokens_count);
     
+    /* process legacy data */
     if (conn->recvpos < conn->recvlast) {
         movcnt = conn->recvlast - conn->recvpos;
         memmove(conn->recvbuf, conn->recvpos, movcnt);
         conn->recvpos = conn->recvbuf;
         conn->recvlast = conn->recvbuf + movcnt;
         goto again;
-    } else { /* all buffer process finish */
+    } else {
         conn->recvpos = conn->recvbuf;
         conn->recvlast = conn->recvbuf;
     }
@@ -324,7 +364,7 @@ void mx_send_client_response(mx_connection_t *conn)
     
     conn->sendpos += wcount;
     
-    if (conn->sendpos >= conn->sendlast) {
+    if (conn->sendpos >= conn->sendlast) { /* finish */
         conn->sendpos = conn->sendbuf;
         conn->sendlast = conn->sendbuf;
         conn->state = mx_event_reading;
@@ -367,8 +407,8 @@ void mx_send_client_body(mx_connection_t *conn)
         }
         break;
     }
-    case mx_send_body_phase:
-    {
+
+    case mx_send_body_phase: {
 send_body_flag:
         wcount = write(conn->fd, conn->itemptr, conn->itembytes);
         if (wcount == -1) {
@@ -381,19 +421,19 @@ send_body_flag:
             mx_free_connection(conn);
             return;
         }
-        
+
         conn->itemptr += wcount;
         conn->itembytes -= wcount;
-        
-        if (conn->itembytes <= 0) {
+
+        if (conn->itembytes <= 0) { /* finish send job item */
             conn->sendpos = conn->sendbuf;
             conn->sendlast = conn->sendbuf;
-            
-            free(conn->item);
+
+            free(conn->item);  /* free current job item */
             conn->item = NULL;
             conn->itemptr = NULL;
             conn->itembytes = 0;
-            
+
             conn->state = mx_event_reading;
             conn->rev_handler = mx_recv_client_request;
             aeDeleteFileEvent(mx_daemon->event, conn->fd, AE_WRITABLE);
@@ -434,28 +474,31 @@ void mx_recv_client_request(mx_connection_t *conn)
     return;
 }
 
+
+/*
+ * Read job item body finish callback
+ */
 void mx_finish_recv_body(mx_connection_t *conn)
 {
-    if (conn->item->data[conn->item->length] != '\r' &&
-        conn->item->data[conn->item->length+1] != '\n')
-    {
-        mx_send_reply(conn, "-ERR queue item invaild");
-        return;
-    }
+    mx_queue_item_t *item = conn->item;
     
-    if (conn->item->delay > 0 && conn->item->delay > mx_current_time) {
-        mx_queue_delay_insert(mx_daemon->delay_queue, conn->item);
+    if (item->data[conn->item->length] != '\r' &&
+        item->data[conn->item->length+1] != '\n') {
+        mx_send_reply_return(conn, "-ERR job item invaild");
+    }
+
+    if (item->delay > 0 && item->delay > mx_current_time) {
+        mx_queue_insert(mx_daemon->delay_queue, item->delay, item);
     } else {
-        if (conn->item->delay > 0)
-            conn->item->delay = 0;
-        mx_queue_ready_insert(conn->use_queue, conn->item);
+        if (item->delay > 0)
+            item->delay = 0;
+        mx_queue_insert(mx_daemon->delay_queue, item->prival, item);
     }
-    
-    conn->use_queue = NULL;
+
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
-    
+
     mx_update_dirty();
 }
 
@@ -505,7 +548,9 @@ void mx_accept_connection(aeEventLoop *eventLoop, int fd, void *data, int mask)
         return;
     }
     
-    (void)mx_create_connection(sock);
+    if (!mx_create_connection(sock)) {
+        mx_write_log(mx_log_notice, "Unable create client connection object");
+    }
     return;
 }
 
@@ -519,8 +564,6 @@ void mx_free_connection(mx_connection_t *conn)
         mx_daemon->free_connections = conn;
         mx_daemon->free_connections_count++;
     } else {
-        free(conn->recvbuf);
-        free(conn->sendbuf);
         free(conn);
     }
 }
@@ -554,7 +597,6 @@ mx_connection_t *mx_create_connection(int fd)
     conn->state = mx_event_reading;
     conn->rev_handler = mx_recv_client_request;
     conn->wev_handler = NULL;
-    conn->use_queue = NULL;
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
@@ -568,6 +610,9 @@ mx_connection_t *mx_create_connection(int fd)
     return conn;
 }
 
+/*
+ * Server timer handler
+ */
 int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
 {
     mx_queue_item_t *item;
@@ -575,13 +620,13 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
     time(&mx_current_time);
     
     while (mx_queue_size(mx_daemon->delay_queue) > 0) {
-        if (!mx_queue_fetch_top(mx_daemon->delay_queue, (void **)&item)) {
+        if (!mx_queue_fetch_head(mx_daemon->delay_queue, (void **)&item)) {
             break;
         }
         if (item->delay < mx_current_time) {
             item->delay = 0;
-            mx_queue_ready_insert(item->belong, item);
-            mx_queue_delete_top(mx_daemon->delay_queue);
+            mx_queue_insert(item->belong, item->prival, item);
+            mx_queue_delete_head(mx_daemon->delay_queue);
             continue;
         }
         break;
@@ -597,73 +642,73 @@ void mx_init_daemon()
     struct linger ling = {0, 0};
     struct sockaddr_in addr;
     int flags = 1;
-    
+
     mx_daemon->log_fd = fopen(mx_daemon->log_file, "a+");
     if (!mx_daemon->log_file) {
-        fprintf(stderr, "Unable open log file\n");
+        fprintf(stderr, "Failed to open log file\n");
         exit(-1);
     }
-    
+
     mx_daemon->fd = socket(AF_INET, SOCK_STREAM, 0);
     if (mx_daemon->fd == -1) {
         mx_write_log(mx_log_error, "Unable create listening server socket");
         exit(-1);
     }
-    
+
     if (mx_set_nonblocking(mx_daemon->fd) == -1) {
         mx_write_log(mx_log_error, "Unable set socket to non-blocking");
         exit(-1);
     }
-    
+
     setsockopt(mx_daemon->fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags));
     setsockopt(mx_daemon->fd, SOL_SOCKET, SO_KEEPALIVE, &flags, sizeof(flags));
     setsockopt(mx_daemon->fd, SOL_SOCKET, SO_LINGER, &ling, sizeof(ling));
 #if !defined(TCP_NOPUSH)
     setsockopt(mx_daemon->fd, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof(flags));
 #endif
-    
+
     addr.sin_family = AF_INET;
     addr.sin_port = htons(mx_daemon->port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    
+
     if (bind(mx_daemon->fd, (struct sockaddr *) &addr, sizeof(addr)) == -1) {
         mx_write_log(mx_log_error, "Unable bind socket");
         close(mx_daemon->fd);
         exit(-1);
     }
-    
+
     if (listen(mx_daemon->fd, 1024) == -1) {
         mx_write_log(mx_log_error, "Unable listen socket");
         close(mx_daemon->fd);
         exit(-1);
     }
-    
+
     mx_daemon->event = aeCreateEventLoop();
     if (!mx_daemon->event) {
         mx_write_log(mx_log_error, "Unable create EventLoop");
         exit(-1);
     }
-    
+
     mx_daemon->table = hash_alloc(32);
     if (!mx_daemon->table) {
         mx_write_log(mx_log_error, "Unable create HashTable");
         exit(-1);
     }
-    
+
     mx_daemon->delay_queue = mx_queue_create("delay_queue", sizeof("delay_queue") - 1);
     if (!mx_daemon->table) {
         mx_write_log(mx_log_error, "Unable create delay queue");
         exit(-1);
     }
-    
+
     if (aeCreateFileEvent(mx_daemon->event, mx_daemon->fd,
             AE_READABLE, mx_accept_connection, NULL) == -1) {
         mx_write_log(mx_log_error, "Unable create accpet file event");
         exit(-1);
     }
-    
+
     aeCreateTimeEvent(mx_daemon->event, 1, mx_core_timer, NULL, NULL);
-    
+
     return;
 }
 
@@ -691,7 +736,7 @@ void mx_version(void)
 }
 
 
-/* config handlers */
+/* config parser handlers */
 
 typedef int (*mx_config_set_handler_t)(char *value, void *data, int offset);
 
@@ -768,6 +813,9 @@ mx_config_command_t mx_config_commands[] = {
 };
 
 
+/*
+ * Find config setting handler command
+ */
 mx_config_command_t *mx_config_find_command(char *name)
 {
     mx_config_command_t *cmd;
@@ -780,31 +828,44 @@ mx_config_command_t *mx_config_find_command(char *name)
     return NULL;
 }
 
-#define MX_CONFIG_ISSPACE(chr) ((chr) == ' ' || (chr) == '\t')
-#define MX_CONFIG_SET_STATE(_state) (state = (_state))
+
+#define mx_nil ((char)0)
+#define MX_CONFIG_IS_SPACE(chr) ((chr) == ' ' || (chr) == '\t')
 
 char *mx_str_trim(char *str)
 {
     char *sptr, *eptr, *temp;
-    
+
     sptr = str;
-    while (*sptr && (MX_CONFIG_ISSPACE(*sptr) || *sptr == '\r' || *sptr == '\n')) {
+    while (*sptr && (MX_CONFIG_IS_SPACE(*sptr) ||
+           *sptr == '\r' || *sptr == '\n'))
+    {
         sptr++;
     }
-    
+
     eptr = temp = sptr;
     while (*temp) {
-        if (!MX_CONFIG_ISSPACE(*temp) && *temp != '\r' && *temp != '\n') {
+        if (!MX_CONFIG_IS_SPACE(*temp) && *temp != '\r' && *temp != '\n') {
             eptr = temp;
         }
         temp++;
     }
-    
-    if (eptr[0] && eptr[1] && (MX_CONFIG_ISSPACE(eptr[1]) || eptr[1] == '\r' || eptr[1] == '\n'))
-        eptr[1] = '\0';
+
+    if (eptr[0] && eptr[1] && (MX_CONFIG_IS_SPACE(eptr[1]) ||
+        eptr[1] == '\r' || eptr[1] == '\n'))
+    {
+        eptr[1] = mx_nil;
+    }
+
     return sptr;
 }
 
+
+#define MX_CONFIG_SET_STATE(_state) (state = (_state))
+
+/*
+ * Parse config line
+ */
 void mx_config_parse_line(char *line)
 {
     char *keyptr, *valptr, *temp;
@@ -822,14 +883,15 @@ void mx_config_parse_line(char *line)
     mx_config_command_t *cmd;
     
     temp = mx_str_trim(line);
-    if (temp[0] == '\0') {
+    if (temp[0] == mx_nil) {
     	return;
     }
     
-    for (; *temp; temp++) {
+    for (; *temp; temp++)
+    {
         switch (state) {
         case mx_config_state_want_key:
-            if (!MX_CONFIG_ISSPACE(*temp)) {
+            if (!MX_CONFIG_IS_SPACE(*temp)) {
                 if (*temp == '#') /* comments and return */
                     return;
                 keyptr = temp;
@@ -837,24 +899,24 @@ void mx_config_parse_line(char *line)
             }
             break;
         case mx_config_state_want_space_equal:
-            if (MX_CONFIG_ISSPACE(*temp)) {
-                *temp = '\0';
+            if (MX_CONFIG_IS_SPACE(*temp)) {
+                *temp = mx_nil;
                 MX_CONFIG_SET_STATE(mx_config_state_want_equal);
             } else if (*temp == '=') {
-                *temp = '\0';
+                *temp = mx_nil;
                 MX_CONFIG_SET_STATE(mx_config_state_want_value);
             }
             break;
         case mx_config_state_want_equal:
             if (*temp == '=') {
                 MX_CONFIG_SET_STATE(mx_config_state_want_value);
-            } else if (!MX_CONFIG_ISSPACE(*temp)) {
+            } else if (!MX_CONFIG_IS_SPACE(*temp)) {
                 fprintf(stderr, "[FAILED] line `%s' invaild.\n", line);
                 exit(-1);
             }
             break;
         case mx_config_state_want_value:
-            if (!MX_CONFIG_ISSPACE(*temp)) {
+            if (!MX_CONFIG_IS_SPACE(*temp)) {
                 if (*temp == '"') {
                     valptr = ++temp;
                     MX_CONFIG_SET_STATE(mx_config_state_want_double);
@@ -871,20 +933,20 @@ void mx_config_parse_line(char *line)
         case mx_config_state_want_double:
             if (*temp == '"') {
                 found = 1;
-                *temp = '\0';
+                *temp = mx_nil;
                 goto enter;
             }
             break;
         case mx_config_state_want_single:
             if (*temp == '\'') {
                 found = 1;
-                *temp = '\0';
+                *temp = mx_nil;
                 goto enter;
             }
             break;
         case mx_config_state_want_wrap:
             if (*temp == '\r' || *temp == '\n') {
-                *temp = '\0';
+                *temp = mx_nil;
                 goto enter;
             }
             break;
@@ -951,12 +1013,21 @@ void mx_usage(void)
     return;
 }
 
+
+/*
+ * Initialization default settings
+ */
 void mx_init_main()
 {
+    mx_daemon->fd = -1;
+    mx_daemon->event = NULL;
     mx_daemon->port = MX_SERVER_PORT;
     mx_daemon->daemon_mode = 0;
     mx_daemon->conf_file = NULL;
     mx_daemon->log_file = MX_LOG_FILE;
+    mx_daemon->table = NULL;
+    mx_daemon->delay_queue = NULL;
+
     /* support to persistence feature */
     mx_daemon->bgsave_filepath = NULL;
     mx_daemon->bgsave_pid = -1;
@@ -1012,12 +1083,12 @@ int main(int argc, char **argv)
     }
 
     if ((getrlimit(RLIMIT_CORE, &rlim)!=0) || rlim.rlim_cur==0) {
-        mx_write_log(mx_log_error, "Unable ensure corefile creation");
+        fprintf(stderr, "Unable ensure corefile creation\n");
         exit(-1);
     }
     
     if (getrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-        mx_write_log(mx_log_error, "Unable getrlimit number of files");
+        fprintf(stderr, "Unable getrlimit number of files\n");
         exit(-1);
     } else {
         int maxfiles = 1024;
@@ -1026,8 +1097,8 @@ int main(int argc, char **argv)
         if (rlim.rlim_max < rlim.rlim_cur)
             rlim.rlim_max = rlim.rlim_cur;
         if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-            mx_write_log(mx_log_error, "Unable set rlimit for open files. "
-                "Try running as root or requesting smaller maxconns value");
+            fprintf(stderr, "Unable set rlimit for open files. "
+                "Try running as root or requesting smaller maxconns value\n");
             exit(-1);
         }
     }
@@ -1035,16 +1106,16 @@ int main(int argc, char **argv)
     sa.sa_handler = SIG_IGN;
     sa.sa_flags = 0;
     if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1) {
-        mx_write_log(mx_log_error, "Unable ignore SIGPIPE");
+        fprintf(stderr, "Unable ignore SIGPIPE\n");
         exit(-1);
     }
     
     if (mx_daemon->conf_file)
-        mx_config_read_file(mx_daemon->conf_file);
+        mx_config_read_file(mx_daemon->conf_file); /* read configure file */
     if (mx_daemon->daemon_mode)
         mx_daemonize();
     mx_init_daemon();
-    mx_load_queue();
+    mx_load_queue();  /* load queues from disk */
     aeMain(mx_daemon->event);
 
     return 0;
@@ -1053,12 +1124,16 @@ int main(int argc, char **argv)
 
 /*
  * Create a new queue item
+ * @param prival, priority value
+ * @param delay, delay time
+ * @param belong, which queue follow
+ * @param size, job item size
  */
 mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong, int size)
 {
     mx_queue_item_t *item;
     
-    item = malloc(sizeof(*item) + size + 2);
+    item = malloc(sizeof(*item) + size + 2); /* includes CRLF */
     if (item) {
         item->prival = prival;
         item->belong = belong;
@@ -1091,38 +1166,42 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     int job_length, pri_value, delay_time, remain;
     char *msg;
     
-    pri_value  = atoi(tokens[2].value);  /* priority value */
-    delay_time = atoi(tokens[3].value);  /* delay time */
-    job_length = atoi(tokens[4].value);
-    
+    pri_value  = atoi(tokens[2].value);  /* job item's priority value */
+    delay_time = atoi(tokens[3].value);  /* job item's delay time */
+    job_length = atoi(tokens[4].value);  /* job item's size */
+
     if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
         (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
         mx_send_reply_return(conn, msg);
     }
 
+    /* find the queue from queues table */
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-        if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length)))
+        /* not found the queue and create it */
+        if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
             mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
+        }
         hash_insert(mx_daemon->table, tokens[1].value, queue);
     }
-    
-    if (!(item = mx_queue_item_create(pri_value, delay_time, queue, job_length)))
+
+    /* create new job item */
+    if (!(item = mx_queue_item_create(pri_value, delay_time, queue, job_length))) {
         mx_send_reply_return(conn, MX_JOB_CREATE_FAILED);
-    
-    conn->use_queue = queue;
+    }
+
     conn->item = item;
-    conn->itemptr = mx_item_data(item);
+    conn->itemptr = mx_item_data(item);  /* point to job item data */
     conn->itembytes = mx_item_size(item) + 2;
-    
+
     remain = conn->recvlast - conn->recvpos;
     if (remain > 0) {
         int tocpy = remain > job_length + 2 ? job_length + 2 : remain;
-        
+
         memcpy(conn->itemptr, conn->recvpos, tocpy);
         conn->itemptr += tocpy;
         conn->itembytes -= tocpy;
-        conn->recvpos += tocpy;
-        
+        conn->recvpos += tocpy;   /* fix receive position */
+
         if (conn->itembytes <= 0) {
             mx_finish_recv_body(conn);
             mx_send_reply_return(conn, "+OK"); /* success and return */
@@ -1138,12 +1217,16 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
     mx_queue_t *queue;
     mx_queue_item_t *item;
 
-    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1)
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
         mx_send_reply_return(conn, MX_QUEUE_NOTFOUND);
-    if (!mx_queue_fetch_top(queue, (void **)&item))
+    }
+    
+    if (!mx_queue_fetch_head(queue, (void **)&item)) {
         mx_send_reply_return(conn, MX_QUEUE_EMPTY);
+    }
+    
     mx_send_item(conn, item);
-    mx_queue_delete_top(queue);
+    mx_queue_delete_head(queue);
     mx_update_dirty();
     return;
 }
@@ -1154,8 +1237,10 @@ void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     mx_queue_t *queue;
     char sndbuf[64];
     
-    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1)
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
         mx_send_reply_return(conn, MX_QUEUE_NOTFOUND);
+    }
+    
     sprintf(sndbuf, "+OK %d", mx_queue_size(queue));
     mx_send_reply_return(conn, sndbuf);
 }
