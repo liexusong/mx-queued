@@ -34,14 +34,25 @@ delay_time: job要延时的秒数<br />
 job_size: job的大小<br />
 job_body: job的数据体<br /><br />
 
-2) 从队列中获取一个job<br />
+2) 添加定时job到队列中:<br />
+<pre><code>
+  <b>timer</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;date_timer&gt; &lt;job_size&gt;\r\n<br />
+  &lt;job_body&gt;\r\n<br />
+</code></pre>
+queue_name: 队列的名称<br />
+priority_value: job的优先值, 值越大越迟获取到<br />
+date_timer: 指定时间把job放到准备队列中<br />
+job_size: job的大小<br />
+job_body: job的数据体<br /><br />
+
+3) 从队列中获取一个job<br />
 <pre><code>
   <b>pop</b> &lt;queue_name&gt;\r\n<br />
 </code></pre>
 queue_name: 队列的名称<br /><br />
 
 <br />
-3) 获取队列的长度<br />
+4) 获取队列的长度<br />
 <pre><code>
   <b>qsize</b> &lt;queue_name&gt;\r\n<br />
 </code></pre>
@@ -51,4 +62,4 @@ queue_name: 队列的名称<br /><br />
 TODO List:
 
 * 持久化功能. (完成)
-* 定时队列功能.
+* 定时队列功能. (完成)

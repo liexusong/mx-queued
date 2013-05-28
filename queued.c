@@ -69,11 +69,13 @@ void mx_send_client_body(mx_connection_t *conn);
 
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
+void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 
 mx_command_t mx_commands[] = {
     {"push",  (sizeof("push")-1),  5, mx_push_handler},
+    {"timer", (sizeof("timer")-1), 5, mx_timer_handler},
     {"pop",   (sizeof("pop")-1),   2, mx_pop_handler},
     {"qsize", (sizeof("qsize")-1), 2, mx_qsize_handler},
     {NULL, 0, 0, NULL}
@@ -488,11 +490,11 @@ void mx_finish_recv_body(mx_connection_t *conn)
     }
 
     if (item->delay > 0 && item->delay > mx_current_time) {
-        mx_queue_insert(mx_daemon->delay_queue, item->delay, item);
+        mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
     } else {
         if (item->delay > 0)
             item->delay = 0;
-        mx_queue_insert(mx_daemon->delay_queue, item->prival, item);
+        mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
     }
 
     conn->item = NULL;
@@ -1134,7 +1136,7 @@ int main(int argc, char **argv)
 mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong, int size)
 {
     mx_queue_item_t *item;
-    
+
     item = malloc(sizeof(*item) + size + 2); /* includes CRLF */
     if (item) {
         item->prival = prival;
@@ -1160,6 +1162,8 @@ mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong,
 #define MX_JOB_SIZE_INVAILD     "-ERR Job size invaild"
 #define MX_JOB_CREATE_FAILED    "-ERR Job create failed"
 
+#define MX_DATE_FORMAT_INVAILD  "-ERR Date format invaild"
+
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 {
@@ -1171,6 +1175,104 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
     pri_value  = atoi(tokens[2].value);  /* job item's priority value */
     delay_time = atoi(tokens[3].value);  /* job item's delay time */
     job_length = atoi(tokens[4].value);  /* job item's size */
+    
+    if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
+        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
+        mx_send_reply_return(conn, msg);
+    }
+
+    /* find the queue from queues table */
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
+        /* not found the queue and create it */
+        if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
+            mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
+        }
+        hash_insert(mx_daemon->table, tokens[1].value, queue);
+    }
+
+    /* create new job item */
+    if (!(item = mx_queue_item_create(pri_value, delay_time, queue, job_length))) {
+        mx_send_reply_return(conn, MX_JOB_CREATE_FAILED);
+    }
+
+    conn->item = item;
+    conn->itemptr = mx_item_data(item);  /* point to job item data */
+    conn->itembytes = mx_item_size(item) + 2;
+
+    remain = conn->recvlast - conn->recvpos;
+    if (remain > 0) {
+        int tocpy = remain > job_length + 2 ? job_length + 2 : remain;
+
+        memcpy(conn->itemptr, conn->recvpos, tocpy);
+        conn->itemptr += tocpy;
+        conn->itembytes -= tocpy;
+        conn->recvpos += tocpy;   /* fix receive position */
+
+        if (conn->itembytes <= 0) {
+            mx_finish_recv_body(conn);
+            mx_send_reply_return(conn, "+OK"); /* success and return */
+        }
+    }
+    conn->rev_handler = mx_recv_client_body;
+    return;
+}
+
+
+static int mx_strtotime(int *delay, const char *buf, const char *fmt)
+{
+    struct tm tv;
+    int year, month, day, hour, min, sec;
+    int result;
+    int ret;
+
+    if (!isdigit(buf[0])) {
+        return -1;
+    }
+
+    ret = sscanf(buf, fmt, &year, &month, &day, &hour, &min, &sec);
+    if (ret != 6) {
+        return -1;
+    }
+
+    tv.tm_sec = sec;
+    tv.tm_min = min;
+    tv.tm_hour = hour;
+    tv.tm_mday = day;
+    tv.tm_mon = month - 1;
+    tv.tm_year = year - 1900;
+
+    result = (int)mktime(&tv);
+    if (result <= 0) {
+        return -1;
+    }
+    
+    if (delay) {
+        *delay = result;
+    }
+    
+    return 0;
+}
+
+
+void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+{
+    mx_queue_t *queue;
+    mx_queue_item_t *item;
+    int job_length, pri_value, delay_time, remain;
+    char *msg;
+    
+    pri_value  = atoi(tokens[2].value);  /* job item's priority value */
+    job_length = atoi(tokens[4].value);  /* job item's size */
+
+    /* job item's delay time */
+    if (mx_strtotime(&delay_time, tokens[3].value, "%d-%d-%d/%d:%d:%d") == 0) {
+    	delay_time = delay_time - mx_current_time;
+    	if (delay_time < 0) {
+    	    delay_time = 0;
+    	}
+    } else {
+        mx_send_reply_return(conn, MX_DATE_FORMAT_INVAILD);
+    }
 
     if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
         (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
@@ -1222,11 +1324,11 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
         mx_send_reply_return(conn, MX_QUEUE_NOTFOUND);
     }
-    
+
     if (!mx_queue_fetch_head(queue, (void **)&item)) {
         mx_send_reply_return(conn, MX_QUEUE_EMPTY);
     }
-    
+
     mx_send_item(conn, item);
     mx_queue_delete_head(queue);
     mx_update_dirty();
@@ -1246,4 +1348,7 @@ void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     sprintf(sndbuf, "+OK %d", mx_queue_size(queue));
     mx_send_reply_return(conn, sndbuf);
 }
+
+
+/* End of file */
 
