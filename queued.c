@@ -832,14 +832,14 @@ mx_config_command_t *mx_config_find_command(char *name)
 
 
 #define mx_nil ((char)0)
-#define MX_CONFIG_IS_SPACE(chr) ((chr) == ' ' || (chr) == '\t')
+#define mx_config_is_space(chr) ((chr) == ' ' || (chr) == '\t')
 
 char *mx_str_trim(char *str)
 {
     char *sptr, *eptr, *temp;
 
     sptr = str;
-    while (*sptr && (MX_CONFIG_IS_SPACE(*sptr) ||
+    while (*sptr && (mx_config_is_space(*sptr) ||
            *sptr == '\r' || *sptr == '\n'))
     {
         sptr++;
@@ -847,13 +847,13 @@ char *mx_str_trim(char *str)
 
     eptr = temp = sptr;
     while (*temp) {
-        if (!MX_CONFIG_IS_SPACE(*temp) && *temp != '\r' && *temp != '\n') {
+        if (!mx_config_is_space(*temp) && *temp != '\r' && *temp != '\n') {
             eptr = temp;
         }
         temp++;
     }
 
-    if (eptr[0] && eptr[1] && (MX_CONFIG_IS_SPACE(eptr[1]) ||
+    if (eptr[0] && eptr[1] && (mx_config_is_space(eptr[1]) ||
         eptr[1] == '\r' || eptr[1] == '\n'))
     {
         eptr[1] = mx_nil;
@@ -863,7 +863,7 @@ char *mx_str_trim(char *str)
 }
 
 
-#define MX_CONFIG_SET_STATE(_state) (state = (_state))
+#define mx_config_set_state(_state) (state = (_state))
 
 /*
  * Parse config line
@@ -893,42 +893,42 @@ void mx_config_parse_line(char *line)
     {
         switch (state) {
         case mx_config_state_want_key:
-            if (!MX_CONFIG_IS_SPACE(*temp)) {
+            if (!mx_config_is_space(*temp)) {
                 if (*temp == '#') /* comments and return */
                     return;
                 keyptr = temp;
-                MX_CONFIG_SET_STATE(mx_config_state_want_space_equal);
+                mx_config_set_state(mx_config_state_want_space_equal);
             }
             break;
         case mx_config_state_want_space_equal:
-            if (MX_CONFIG_IS_SPACE(*temp)) {
+            if (mx_config_is_space(*temp)) {
                 *temp = mx_nil;
-                MX_CONFIG_SET_STATE(mx_config_state_want_equal);
+                mx_config_set_state(mx_config_state_want_equal);
             } else if (*temp == '=') {
                 *temp = mx_nil;
-                MX_CONFIG_SET_STATE(mx_config_state_want_value);
+                mx_config_set_state(mx_config_state_want_value);
             }
             break;
         case mx_config_state_want_equal:
             if (*temp == '=') {
-                MX_CONFIG_SET_STATE(mx_config_state_want_value);
-            } else if (!MX_CONFIG_IS_SPACE(*temp)) {
+                mx_config_set_state(mx_config_state_want_value);
+            } else if (!mx_config_is_space(*temp)) {
                 fprintf(stderr, "[failed] line `%s' invaild.\n", line);
                 exit(-1);
             }
             break;
         case mx_config_state_want_value:
-            if (!MX_CONFIG_IS_SPACE(*temp)) {
+            if (!mx_config_is_space(*temp)) {
                 if (*temp == '"') {
                     valptr = ++temp;
-                    MX_CONFIG_SET_STATE(mx_config_state_want_double);
+                    mx_config_set_state(mx_config_state_want_double);
                 } else if (*temp == '\'') {
                     valptr = ++temp;
-                    MX_CONFIG_SET_STATE(mx_config_state_want_single);
+                    mx_config_set_state(mx_config_state_want_single);
                 } else {
                     found = 1; /* because the last line no wrap */
                     valptr = temp;
-                    MX_CONFIG_SET_STATE(mx_config_state_want_wrap);
+                    mx_config_set_state(mx_config_state_want_wrap);
                 }
             }
             break;
