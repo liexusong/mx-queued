@@ -52,6 +52,24 @@ queue_name: 队列的名称<br /><br />
 queue_name: 队列的名称<br /><br />
 
 -------------------------------------------------
+
+安装：
+<pre><code>
+$ cd mx-queue/
+$ make
+</code></pre>
+
+配置：
+<pre><code>
+daemon = "no"                       #是否使用守护进程模式
+port = "21021"                      #监听的端口
+log_filepath = "./mx-queue.log"     #日志文件路径
+bgsave_filepath = "./mx-queue.db"   #持久化文件路径
+bgsave_rate = "60"                  #多久进行一次持久化
+changes_todisk = "20"               #多少个藏数据进行一次持久化
+</code></pre>
+
+-------------------------------------------------
 TODO List:
 
 * 持久化功能. (完成)
