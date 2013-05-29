@@ -23,6 +23,8 @@
 #define mx_update_dirty() do { mx_daemon->dirty++; } while(0)
 #define mx_clean_dirty() do { mx_daemon->dirty = 0; } while(0)
 
+#define MX_CONNECTION_WATCHER 1
+
 
 typedef struct mx_connection_s mx_connection_t;
 typedef struct mx_queue_item_s mx_queue_item_t;
@@ -47,6 +49,7 @@ typedef enum {
 
 
 typedef struct mx_queue_s {
+    struct list_head watcher;
     mx_skiplist_t *list;
     int  name_len;
     char name_val[0];
@@ -65,6 +68,7 @@ struct mx_queue_item_s {
 struct mx_connection_s {
     int fd;
     mx_event_state state;
+    int flag;
     char *recvbuf;
     char *recvpos;
     char *recvlast;
@@ -78,6 +82,7 @@ struct mx_connection_s {
     mx_queue_item_t *item;
     char *itemptr;
     int itembytes;
+    struct list_head watch;
     mx_send_item_phase phase;
     mx_connection_t *free_next;
 };

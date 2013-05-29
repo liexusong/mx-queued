@@ -70,12 +70,14 @@ void mx_send_client_body(mx_connection_t *conn);
 
 void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
+void mx_watch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 
 mx_command_t mx_commands[] = {
     {"push",  (sizeof("push")-1),  5, mx_push_handler},
     {"timer", (sizeof("timer")-1), 5, mx_timer_handler},
+    {"watch", (sizeof("watch")-1), 2, mx_watch_handler},
     {"pop",   (sizeof("pop")-1),   2, mx_pop_handler},
     {"qsize", (sizeof("qsize")-1), 2, mx_qsize_handler},
     {NULL, 0, 0, NULL}
@@ -134,6 +136,9 @@ mx_queue_t *mx_queue_create(char *name, int name_len)
         queue->name_val[name_len] = 0;
         queue->name_len = name_len;
         
+        /* init watcher list */
+        INIT_LIST_HEAD(&queue->watcher);
+        
         /* create queue list */
         queue->list = mx_skiplist_create();
         if (!queue->list) {
@@ -167,6 +172,10 @@ int mx_set_nonblocking(int fd)
 void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
 {
     mx_connection_t *conn = (mx_connection_t *)data;
+    
+    if (conn->flag & MX_CONNECTION_WATCHER) {
+        return;
+    }
     
     if (conn->fd != fd ||
        (mask == AE_READABLE && conn->state != mx_event_reading) ||
@@ -492,16 +501,28 @@ void mx_finish_recv_body(mx_connection_t *conn)
     if (item->delay > 0 && item->delay > mx_current_time) {
         mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
     } else {
-        if (item->delay > 0)
+        if (item->delay > 0) {
             item->delay = 0;
-        mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
+        }
+        /* watcher list was not empty */
+        if (!list_empty(&(item->belong->watcher)))
+        {
+            mx_connection_t *watcher;
+            
+            watcher = list_entry(item->belong->watcher.next, mx_connection_t, watch);
+            watcher->flag = 0;
+            list_del(&watcher->watch);
+            
+            mx_send_item(watcher, item);
+        } else {
+            mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
+            mx_update_dirty();
+        }
     }
 
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
-
-    mx_update_dirty();
 }
 
 void mx_recv_client_body(mx_connection_t *conn)
@@ -596,6 +617,7 @@ mx_connection_t *mx_create_connection(int fd)
     conn->sendlast = conn->sendbuf;
 
     conn->fd = fd;
+    conn->flag = 0;
     conn->state = mx_event_reading;
     conn->rev_handler = mx_recv_client_request;
     conn->wev_handler = NULL;
@@ -625,10 +647,24 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         if (!mx_queue_fetch_head(mx_daemon->delay_queue, (void **)&item)) {
             break;
         }
-        if (item->delay < mx_current_time) {
-            item->delay = 0;
-            mx_queue_insert(item->belong, item->prival, item);
-            mx_queue_delete_head(mx_daemon->delay_queue);
+        
+        if (item->delay < mx_current_time)
+        {
+            if (!list_empty(&(item->belong->watcher))) {
+                mx_connection_t *watcher;
+
+                watcher = list_entry(item->belong->watcher.next, mx_connection_t, watch);
+                watcher->flag = 0;
+                list_del(&watcher->watch);
+                
+                mx_send_item(watcher, item);
+                mx_update_dirty(); /* update queue dirtys */
+            } else {
+            	item->delay = 0;
+                mx_queue_insert(item->belong, item->prival, item);
+                mx_queue_delete_head(mx_daemon->delay_queue);
+            }
+            
             continue;
         }
         break;
@@ -697,7 +733,7 @@ void mx_init_daemon()
         exit(-1);
     }
 
-    mx_daemon->delay_queue = mx_queue_create("delay_queue", sizeof("delay_queue") - 1);
+    mx_daemon->delay_queue = mx_queue_create("__delay__", sizeof("__delay__") - 1);
     if (!mx_daemon->table) {
         mx_write_log(mx_log_error, "Unable create delay queue");
         exit(-1);
@@ -863,17 +899,17 @@ char *mx_str_trim(char *str)
 }
 
 
-#define mx_config_set_state(_state) (state = (_state))
-
 /*
  * Parse config line
  */
 void mx_config_parse_line(char *line)
 {
+
+#define mx_config_set_state(_state) (state = (_state))
+
     char *keyptr, *valptr, *temp;
     int found = 0;
-    enum
-    {
+    enum {
         mx_config_state_want_key,
         mx_config_state_want_space_equal,
         mx_config_state_want_equal,
@@ -975,7 +1011,7 @@ enter:
         fprintf(stderr, "[failed] set configure item `%s' failed.\n", keyptr);
         exit(-1);
     }
-    
+
     return;
 }
 
@@ -1085,12 +1121,12 @@ int main(int argc, char **argv)
     }
 
     if ((getrlimit(RLIMIT_CORE, &rlim)!=0) || rlim.rlim_cur==0) {
-        fprintf(stderr, "[failed] Unable ensure corefile creation\n");
+        fprintf(stderr, "[failed] unable ensure corefile creation.\n");
         exit(-1);
     }
     
     if (getrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-        fprintf(stderr, "[failed] Unable getrlimit number of files\n");
+        fprintf(stderr, "[failed] unable getrlimit number of files.\n");
         exit(-1);
     } else {
         int maxfiles = 1024;
@@ -1099,8 +1135,8 @@ int main(int argc, char **argv)
         if (rlim.rlim_max < rlim.rlim_cur)
             rlim.rlim_max = rlim.rlim_cur;
         if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-            fprintf(stderr, "[failed] Unable set rlimit for open files. "
-                "Try running as root or requesting smaller maxconns value\n");
+            fprintf(stderr, "[failed] unable set rlimit for open files "
+                "Try running as root or requesting smaller maxconns value.\n");
             exit(-1);
         }
     }
@@ -1108,7 +1144,7 @@ int main(int argc, char **argv)
     sa.sa_handler = SIG_IGN;
     sa.sa_flags = 0;
     if (sigemptyset(&sa.sa_mask) == -1 || sigaction(SIGPIPE, &sa, 0) == -1) {
-        fprintf(stderr, "[failed] Unable ignore SIGPIPE\n");
+        fprintf(stderr, "[failed] unable ignore SIGPIPE.\n");
         exit(-1);
     }
     
@@ -1165,59 +1201,6 @@ mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong,
 #define MX_DATE_FORMAT_INVAILD  "-ERR Date format invaild"
 
 
-void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
-{
-    mx_queue_t *queue;
-    mx_queue_item_t *item;
-    int job_length, pri_value, delay_time, remain;
-    char *msg;
-    
-    pri_value  = atoi(tokens[2].value);  /* job item's priority value */
-    delay_time = atoi(tokens[3].value);  /* job item's delay time */
-    job_length = atoi(tokens[4].value);  /* job item's size */
-    
-    if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
-        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
-        mx_send_reply_return(conn, msg);
-    }
-
-    /* find the queue from queues table */
-    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
-        /* not found the queue and create it */
-        if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
-            mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
-        }
-        hash_insert(mx_daemon->table, tokens[1].value, queue);
-    }
-
-    /* create new job item */
-    if (!(item = mx_queue_item_create(pri_value, delay_time, queue, job_length))) {
-        mx_send_reply_return(conn, MX_JOB_CREATE_FAILED);
-    }
-
-    conn->item = item;
-    conn->itemptr = mx_item_data(item);  /* point to job item data */
-    conn->itembytes = mx_item_size(item) + 2;
-
-    remain = conn->recvlast - conn->recvpos;
-    if (remain > 0) {
-        int tocpy = remain > job_length + 2 ? job_length + 2 : remain;
-
-        memcpy(conn->itemptr, conn->recvpos, tocpy);
-        conn->itemptr += tocpy;
-        conn->itembytes -= tocpy;
-        conn->recvpos += tocpy;   /* fix receive position */
-
-        if (conn->itembytes <= 0) {
-            mx_finish_recv_body(conn);
-            mx_send_reply_return(conn, "+OK"); /* success and return */
-        }
-    }
-    conn->rev_handler = mx_recv_client_body;
-    return;
-}
-
-
 static int mx_strtotime(int *delay, const char *buf, const char *fmt)
 {
     struct tm tv;
@@ -1253,29 +1236,33 @@ static int mx_strtotime(int *delay, const char *buf, const char *fmt)
     return 0;
 }
 
-
-void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+static void mx_push_common_handler(mx_connection_t *conn, mx_token_t *tokens, int istimer)
 {
     mx_queue_t *queue;
     mx_queue_item_t *item;
-    int job_length, pri_value, delay_time, remain;
+    int job_length, prio_value, delay_time, remain;
     char *msg;
     
-    pri_value  = atoi(tokens[2].value);  /* job item's priority value */
+    prio_value = atoi(tokens[2].value);  /* job item's priority */
     job_length = atoi(tokens[4].value);  /* job item's size */
 
     /* job item's delay time */
-    if (mx_strtotime(&delay_time, tokens[3].value, "%d-%d-%d/%d:%d:%d") == 0) {
-    	delay_time = delay_time - mx_current_time;
-    	if (delay_time < 0) {
-    	    delay_time = 0;
-    	}
+    if (istimer) {
+        if (mx_strtotime(&delay_time, tokens[3].value, "%d-%d-%d/%d:%d:%d") == 0) {
+    	    delay_time = delay_time - mx_current_time;
+    	    if (delay_time < 0) {
+    	        delay_time = 0;
+    	    }
+        } else {
+            mx_send_reply_return(conn, MX_DATE_FORMAT_INVAILD);
+        }
     } else {
-        mx_send_reply_return(conn, MX_DATE_FORMAT_INVAILD);
+        delay_time = atoi(tokens[3].value);
     }
 
     if ((job_length <= 0 && (msg = MX_JOB_SIZE_INVAILD)) || 
-        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG))) {
+        (tokens[1].length >= 128 && (msg = MX_QUEUE_NAME_TOOLONG)))
+    {
         mx_send_reply_return(conn, msg);
     }
 
@@ -1289,12 +1276,12 @@ void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     }
 
     /* create new job item */
-    if (!(item = mx_queue_item_create(pri_value, delay_time, queue, job_length))) {
+    if (!(item = mx_queue_item_create(prio_value, delay_time, queue, job_length))) {
         mx_send_reply_return(conn, MX_JOB_CREATE_FAILED);
     }
 
     conn->item = item;
-    conn->itemptr = mx_item_data(item);  /* point to job item data */
+    conn->itemptr = mx_item_data(item);
     conn->itembytes = mx_item_size(item) + 2;
 
     remain = conn->recvlast - conn->recvpos;
@@ -1311,7 +1298,43 @@ void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
             mx_send_reply_return(conn, "+OK"); /* success and return */
         }
     }
+
     conn->rev_handler = mx_recv_client_body;
+    return;
+}
+
+
+void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count) {
+    mx_push_common_handler(conn, tokens, 0);
+}
+
+
+void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count) {
+    mx_push_common_handler(conn, tokens, 1);
+}
+
+
+void mx_watch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+{
+    mx_queue_t *queue;
+    mx_queue_item_t *item;
+    
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1)
+    {
+        if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
+            mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
+        }
+        hash_insert(mx_daemon->table, tokens[1].value, queue);
+    }
+    
+    if (!mx_queue_fetch_head(queue, (void **)&item)) {
+        list_add_tail(&conn->watch, &queue->watcher); /* add to watcher list */
+        conn->flag = MX_CONNECTION_WATCHER;
+    } else {
+        mx_send_item(conn, item);
+        mx_queue_delete_head(queue);
+        mx_update_dirty();
+    }
     return;
 }
 
@@ -1340,11 +1363,11 @@ void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
 {
     mx_queue_t *queue;
     char sndbuf[64];
-    
+
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
         mx_send_reply_return(conn, MX_QUEUE_NOTFOUND);
     }
-    
+
     sprintf(sndbuf, "+OK %d", mx_queue_size(queue));
     mx_send_reply_return(conn, sndbuf);
 }
