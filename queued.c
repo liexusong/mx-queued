@@ -174,6 +174,8 @@ void mx_process_handler(aeEventLoop *eventLoop, int fd, void *data, int mask)
     mx_connection_t *conn = (mx_connection_t *)data;
     
     if (conn->flag & MX_CONNECTION_WATCHER) {
+        mx_write_log(mx_log_notice, "current client was blocked but event occur, event(%s)",
+            (mask == AE_READABLE ? "read" : "write"));
         return;
     }
     
