@@ -3,18 +3,6 @@ mx-queued
 
 The fast message queue server
 
-<h3>communication protocol:</h3>
-
-1) Push a job into the queue<br />
-<b>push</b> &lt;queue-name&gt; &lt;priority-value&gt; &lt;delay-time&gt; &lt;job-size&gt;\r\n<br />
-&lt;job-body&gt;\r\n<br />
-
-2) Pop a job from the queue<br />
-<b>pop</b> &lt;queue-name&gt;\r\n<br />
-
-3) Get the queue size<br />
-<b>qsize</b> &lt;queue-name&gt;\r\n<br />
-
 -------------------------------------------------
 
 原理:<br />
@@ -51,10 +39,15 @@ job_body: job的数据体<br /><br />
 </code></pre>
 queue_name: 队列的名称<br /><br />
 
-<br />
 4) 获取队列的长度<br />
 <pre><code>
   <b>qsize</b> &lt;queue_name&gt;\r\n<br />
+</code></pre>
+queue_name: 队列的名称<br /><br />
+
+5) 监听一个队列<br />
+<pre><code>
+  <b>watch</b> &lt;queue_name&gt;\r\n<br />
 </code></pre>
 queue_name: 队列的名称<br /><br />
 
@@ -63,4 +56,4 @@ TODO List:
 
 * 持久化功能. (完成)
 * 定时队列功能. (完成)
-* 客户端可以阻塞获取job.
+* 客户端可以阻塞获取job. (完成)
