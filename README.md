@@ -5,27 +5,27 @@ The fast message queue server
 
 -------------------------------------------------
 
-原理:<br />
-1) 使用跳跃表来存储队列, 所以队列支持优先值<br />
-2) 使用跳跃表保存延时队列<br />
-3) 使用HashTable保存所有的有名队列<br />
-<br />
+原理:
+* 使用跳跃表来存储队列, 所以队列支持优先值
+* 使用跳跃表保存延时队列
+* 使用HashTable保存所有的有名队列
+
 使用协议:<br />
-1) 添加一个job到队列中:<br />
+* 添加一个job到队列中:
 <pre><code>
-  <b>push</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;delay_time&gt; &lt;job_size&gt;\r\n<br />
-  &lt;job_body&gt;\r\n<br />
+  <b>push</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;delay_time&gt; &lt;job_size&gt;\r\n
+  &lt;job_body&gt;\r\n
 </code></pre>
 queue_name: 队列的名称<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
 job_size: job的大小<br />
-job_body: job的数据体<br /><br />
+job_body: job的数据体<br />
 
-2) 添加定时job到队列中:<br />
+* 添加定时job到队列中:
 <pre><code>
-  <b>timer</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;date_timer&gt; &lt;job_size&gt;\r\n<br />
-  &lt;job_body&gt;\r\n<br />
+  <b>timer</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;date_timer&gt; &lt;job_size&gt;\r\n
+  &lt;job_body&gt;\r\n
 </code></pre>
 queue_name: 队列的名称<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
@@ -33,23 +33,23 @@ date_timer: 指定时间把job放到准备队列中, 格式为：year-mon-day/ho
 job_size: job的大小<br />
 job_body: job的数据体<br /><br />
 
-3) 从队列中获取一个job<br />
+* 从队列中获取一个job
 <pre><code>
-  <b>pop</b> &lt;queue_name&gt;\r\n<br />
+  <b>pop</b> &lt;queue_name&gt;\r\n
 </code></pre>
-queue_name: 队列的名称<br /><br />
+queue_name: 队列的名称
 
-4) 获取队列的长度<br />
+* 获取队列的长度
 <pre><code>
-  <b>qsize</b> &lt;queue_name&gt;\r\n<br />
+  <b>qsize</b> &lt;queue_name&gt;\r\n
 </code></pre>
-queue_name: 队列的名称<br /><br />
+queue_name: 队列的名称
 
-5) 监听一个队列<br />
+* 监听一个队列
 <pre><code>
-  <b>watch</b> &lt;queue_name&gt;\r\n<br />
+  <b>watch</b> &lt;queue_name&gt;\r\n
 </code></pre>
-queue_name: 队列的名称<br /><br />
+queue_name: 队列的名称<br />
 
 -------------------------------------------------
 
