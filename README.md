@@ -51,6 +51,20 @@ queue_name: 队列的名称
 </code></pre>
 queue_name: 队列的名称<br />
 
+* 获取一个job, 并且把这个job暂时放置到回收站
+<pre><code>
+  <b>fetch</b> &lt;queue_name&gt;\r\n
+</code></pre>
+queue_name: 队列的名称<br />
+
+* 把回收站的指定ID的job放置到队列中
+<pre><code>
+  <b>recycle</b> &lt;recycle_id&gt; &lt;priority_value&gt; &lt;delay_time&gt;\r\n
+</code></pre>
+recycle_id: job在回收站的ID, 由fetch命令提供
+priority_value: job的优先值, 值越大越迟获取到<br />
+delay_time: job要延时的秒数<br />
+
 -------------------------------------------------
 
 安装：
@@ -67,6 +81,7 @@ log_filepath = "./mx-queue.log"     #日志文件路径
 bgsave_filepath = "./mx-queue.db"   #持久化文件路径
 bgsave_rate = "60"                  #多久进行一次持久化
 changes_todisk = "20"               #多少个藏数据进行一次持久化
+recycle_expire = "60"               #回收站的生命周期
 </code></pre>
 
 -------------------------------------------------
@@ -75,4 +90,4 @@ TODO List:
 * 持久化功能. (完成)
 * 定时队列功能. (完成)
 * 客户端可以监听队列. (完成)
-* 增加临时存放功能.
+* 增加临时存放功能. (完成)
