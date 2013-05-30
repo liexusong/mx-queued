@@ -449,10 +449,10 @@ send_body_flag:
             conn->sendlast = conn->sendbuf;
 
             if (!conn->sent_recycle) { /* not be recycle */
-                conn->recycle_id = -1;
                 free(conn->item);  /* free current job */
             } else {
                 conn->sent_recycle = 0;
+                conn->recycle_id = -1;
             }
 
             conn->item = NULL;
