@@ -61,7 +61,7 @@ queue_name: 队列的名称<br />
 <pre><code>
   <b>recycle</b> &lt;recycle_id&gt; &lt;priority_value&gt; &lt;delay_time&gt;\r\n
 </code></pre>
-recycle_id: job在回收站的ID, 由fetch命令提供
+recycle_id: job在回收站的ID, 由fetch命令提供<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
 
