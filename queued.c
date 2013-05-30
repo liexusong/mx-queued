@@ -337,9 +337,6 @@ again:
         eline--;
     *eline = '\0';
 
-#if 0
-    memset(tokens, 0, sizeof(tokens));
-#endif
 
     tokens_count = mx_tokenize_command(bline, tokens, MX_MAX_TOKENS);
     if (tokens_count == 0) {
@@ -452,9 +449,10 @@ send_body_flag:
             conn->sendlast = conn->sendbuf;
 
             if (!conn->sent_recycle) { /* not be recycle */
+                conn->recycle_id = -1;
                 free(conn->item);  /* free current job */
             } else {
-            	conn->sent_recycle = 0;
+                conn->sent_recycle = 0;
             }
 
             conn->item = NULL;
@@ -642,6 +640,7 @@ mx_connection_t *mx_create_connection(int fd)
     conn->itemptr = NULL;
     conn->itembytes = 0;
     conn->sent_recycle = 0;
+    conn->recycle_id = -1;
 
     if (aeCreateFileEvent(mx_daemon->event, conn->fd, AE_READABLE, mx_process_handler, conn) == -1) {
         mx_write_log(mx_log_notice, "Unable create file event, client fd(%d)", conn->fd);

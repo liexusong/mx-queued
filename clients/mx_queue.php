@@ -68,6 +68,37 @@ class mx_queued
         return $this->__pop_watch($name, false);
     }
     
+    public function fetch($name) {
+        fwrite($this->conn, "fetch $name\r\n");
+        
+        $response = fgets($this->conn);
+        $response = explode(' ', $response);
+        if ($response[0] == '+OK') {
+            $recycle_id = $response[1];
+            $size = $response[2] + 2;
+        } else {
+            return false;
+        }
+        
+        while (strlen($data) < $size) {
+            $data .= fread($this->conn, $size);
+        }
+        return array('recycle_id' => $recycle_id, 'data' => $data);
+    }
+    
+    public function recycle($id, $prival, $delay) {
+        $cmd = "recycle $id $prival $delay\r\n";
+        fwrite($this->conn, $cmd);
+        
+        $response = fgets($this->conn);
+        $response = explode(' ', $response);
+        if ($response[0] == '+OK') {
+            return true;
+        } else {
+            return false;
+        }
+    }
+    
     public function queue_size($name) {
         $cmd = "qsize $name\r\n";
         fwrite($this->conn, $cmd);
