@@ -251,7 +251,7 @@ void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
     char buf[128];
     int len;
 
-    if (conn->sent_recycle) {
+    if (conn->sent_recycle) { /* will be recycle, so return the recycle id */
         len = sprintf(buf, "+OK %d %d\r\n", conn->recycle_id, item->length);
     } else {
         len = sprintf(buf, "+OK %d\r\n", item->length);
@@ -444,12 +444,12 @@ send_body_flag:
         conn->itemptr += wcount;
         conn->itembytes -= wcount;
 
-        if (conn->itembytes <= 0) { /* finish send job item */
+        if (conn->itembytes <= 0) { /* finish sent job item */
             conn->sendpos = conn->sendbuf;
             conn->sendlast = conn->sendbuf;
 
             if (!conn->sent_recycle) { /* not be recycle */
-                free(conn->item);  /* free current job */
+                free(conn->item);      /* free current job */
             } else {
                 conn->sent_recycle = 0;
                 conn->recycle_id = -1;
@@ -514,7 +514,7 @@ void mx_finish_recv_body(mx_connection_t *conn)
 
     if (item->delay > 0 && item->delay > mx_current_time) {
         mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
-        mx_update_dirty();
+        mx_dirty_update();
     } else {
         if (item->delay > 0) {
             item->delay = 0;
@@ -531,7 +531,7 @@ void mx_finish_recv_body(mx_connection_t *conn)
             mx_send_item(watcher, item);
         } else {
             mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
-            mx_update_dirty();
+            mx_dirty_update();
         }
     }
 
@@ -676,9 +676,9 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
                 list_del(&watcher->watch);
                 
                 mx_send_item(watcher, item);
-                mx_update_dirty(); /* update queue dirtys */
+                mx_dirty_update(); /* update queue dirtys */
             } else {
-            	item->delay = 0;
+                item->delay = 0;
                 mx_queue_insert(item->belong, item->prival, item);
                 mx_queue_delete_head(mx_daemon->delay_queue);
             }
@@ -697,7 +697,7 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         free(recycle->item);
         free(recycle);
         mx_skiplist_delete_min(mx_daemon->recycle->recycle);
-        mx_daemon->recycle->count--;
+        mx_recycle_dec();
         
         break;
     }
@@ -722,7 +722,7 @@ mx_recycle_item_t *mx_recycle_push()
             free(item);
             return NULL;
         }
-        mx_daemon->recycle->count++;
+        mx_recycle_inc();
     }
     return item;
 }
@@ -822,6 +822,8 @@ void mx_init_daemon()
     }
 
     aeCreateTimeEvent(mx_daemon->event, 1, mx_core_timer, NULL, NULL);
+
+    time(&mx_current_time);
 
     return;
 }
@@ -1009,7 +1011,7 @@ void mx_config_parse_line(char *line)
     
     temp = mx_str_trim(line);
     if (temp[0] == mx_nil) {
-    	return;
+        return;
     }
     
     for (; *temp; temp++)
@@ -1036,7 +1038,7 @@ void mx_config_parse_line(char *line)
             if (*temp == '=') {
                 mx_config_set_state(mx_config_state_want_value);
             } else if (!mx_config_is_space(*temp)) {
-                fprintf(stderr, "[failed] line `%s' invaild.\n", line);
+                fprintf(stderr, "[failed] configure line `%s' invaild.\n", line);
                 exit(-1);
             }
             break;
@@ -1076,7 +1078,7 @@ void mx_config_parse_line(char *line)
             }
             break;
         default:
-            fprintf(stderr, "[failed] line `%s' invaild.\n", line);
+            fprintf(stderr, "[failed] configure line `%s' invaild.\n", line);
             exit(-1);
             break;
         }
@@ -1084,7 +1086,7 @@ void mx_config_parse_line(char *line)
 
 enter:
     if (!found) {
-        fprintf(stderr, "[failed] line `%s' invaild.\n", line);
+        fprintf(stderr, "[failed] configure line `%s' invaild.\n", line);
         exit(-1);
     }
     
@@ -1279,14 +1281,10 @@ mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong,
 
 /* Commands handlers */
 
-#define MX_QUEUE_CREATE_FAILED  "-ERR Queue create failed"
 #define MX_QUEUE_NAME_TOOLONG   "-ERR Queue name too long"
 #define MX_QUEUE_NOTFOUND       "-ERR Queue not found"
 #define MX_QUEUE_EMPTY          "-ERR Queue empty"
-
 #define MX_JOB_SIZE_INVAILD     "-ERR Job size invaild"
-#define MX_JOB_CREATE_FAILED    "-ERR Job create failed"
-
 #define MX_DATE_FORMAT_INVAILD  "-ERR Date format invaild"
 #define MX_NOT_ENOUGH_MEMORY    "-ERR Not enough memory"
 #define MX_RECYCLEID_NOTFOUND   "-ERR Recycle id not found"
@@ -1327,23 +1325,24 @@ static int mx_strtotime(int *delay, const char *buf, const char *fmt)
     return 0;
 }
 
-static void mx_push_common_handler(mx_connection_t *conn, mx_token_t *tokens, int istimer)
+static void mx_push_common_handler(mx_connection_t *conn, mx_token_t *tokens, int is_timer)
 {
     mx_queue_t *queue;
     mx_queue_item_t *item;
-    int job_length, prio_value, delay_time, remain;
+    int job_length, prio_value, delay_time;
+    int remain;
     char *msg;
     
     prio_value = atoi(tokens[2].value);  /* job item's priority */
     job_length = atoi(tokens[4].value);  /* job item's size */
 
     /* job item's delay time */
-    if (istimer) {
+    if (is_timer) {
         if (mx_strtotime(&delay_time, tokens[3].value, "%d-%d-%d/%d:%d:%d") == 0) {
-    	    delay_time = delay_time - mx_current_time;
-    	    if (delay_time < 0) {
-    	        delay_time = 0;
-    	    }
+            delay_time = delay_time - mx_current_time;
+            if (delay_time < 0) {
+                delay_time = 0;
+            }
         } else {
             mx_send_reply_return(conn, MX_DATE_FORMAT_INVAILD);
         }
@@ -1361,14 +1360,14 @@ static void mx_push_common_handler(mx_connection_t *conn, mx_token_t *tokens, in
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
         /* not found the queue and create it */
         if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
-            mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
+            mx_send_reply_return(conn, MX_NOT_ENOUGH_MEMORY);
         }
         hash_insert(mx_daemon->table, tokens[1].value, queue);
     }
 
     /* create new job item */
     if (!(item = mx_queue_item_create(prio_value, delay_time, queue, job_length))) {
-        mx_send_reply_return(conn, MX_JOB_CREATE_FAILED);
+        mx_send_reply_return(conn, MX_NOT_ENOUGH_MEMORY);
     }
 
     conn->item = item;
@@ -1413,7 +1412,7 @@ void mx_watch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1)
     {
         if (!(queue = mx_queue_create(tokens[1].value, tokens[1].length))) {
-            mx_send_reply_return(conn, MX_QUEUE_CREATE_FAILED);
+            mx_send_reply_return(conn, MX_NOT_ENOUGH_MEMORY);
         }
         hash_insert(mx_daemon->table, tokens[1].value, queue);
     }
@@ -1424,7 +1423,7 @@ void mx_watch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
     } else {
         mx_send_item(conn, item);
         mx_queue_delete_head(queue);
-        mx_update_dirty();
+        mx_dirty_update();
     }
     return;
 }
@@ -1445,7 +1444,7 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
 
     mx_send_item(conn, item);
     mx_queue_delete_head(queue);
-    mx_update_dirty();
+    mx_dirty_update();
     return;
 }
 
@@ -1469,12 +1468,12 @@ void mx_fetch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_coun
         mx_send_reply_return(conn, MX_NOT_ENOUGH_MEMORY);
     }
     recycle->item = item;
-    conn->sent_recycle = 1; /* don't free job after sent */
-    conn->recycle_id = recycle->id;
+    conn->sent_recycle = 1;         /* don't free job after sent */
+    conn->recycle_id = recycle->id; /* save the recycle id and send to client */
 
     mx_send_item(conn, item);
     mx_queue_delete_head(queue);
-    mx_update_dirty();
+    mx_dirty_update();
 
     return;
 }
@@ -1491,8 +1490,8 @@ void mx_recycle_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_co
     delay_time = atoi(tokens[3].value); /* job item's size */
     
     if (mx_skiplist_delete_key(mx_daemon->recycle->recycle, recycle_id, (void **)&recycle) != SKL_STATUS_OK) {
-	    mx_send_reply_return(conn, MX_RECYCLEID_NOTFOUND);
-	}
+        mx_send_reply_return(conn, MX_RECYCLEID_NOTFOUND);
+    }
 
     item = recycle->item;
     free(recycle);
@@ -1505,7 +1504,7 @@ void mx_recycle_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_co
 
     if (item->delay > 0 && item->delay > mx_current_time) {
         mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
-        mx_update_dirty();
+        mx_dirty_update();
     } else {
         if (item->delay > 0) {
             item->delay = 0;
@@ -1522,11 +1521,11 @@ void mx_recycle_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_co
             mx_send_item(watcher, item);
         } else {
             mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
-            mx_update_dirty();
+            mx_dirty_update();
         }
     }
 
-    mx_daemon->recycle->count--;
+    mx_recycle_dec();
     mx_send_reply_return(conn, "+OK");
 }
 

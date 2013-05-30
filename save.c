@@ -154,7 +154,7 @@ static int mx_bgsave_queue()
         exit(0);
     default: /* parent */
         mx_daemon->bgsave_pid = pid;
-        mx_clean_dirty();
+        mx_dirty_clean();
         break;
     }
     

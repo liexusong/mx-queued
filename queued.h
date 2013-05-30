@@ -20,8 +20,11 @@
 #define mx_item_data(item) (item)->data
 #define mx_item_size(item) (item)->length
 
-#define mx_update_dirty() do { mx_daemon->dirty++; } while(0)
-#define mx_clean_dirty() do { mx_daemon->dirty = 0; } while(0)
+#define mx_dirty_update() do { mx_daemon->dirty++; } while(0)
+#define mx_dirty_clean()  do { mx_daemon->dirty = 0; } while(0)
+
+#define mx_recycle_inc() do { mx_daemon->recycle->count++; } while(0)
+#define mx_recycle_dec() do { mx_daemon->recycle->count--; } while(0)
 
 #define MX_CONNECTION_WATCHER 1
 
