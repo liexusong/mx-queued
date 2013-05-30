@@ -65,6 +65,20 @@ struct mx_queue_item_s {
 };
 
 
+typedef struct mx_recycle_s {
+    mx_skiplist_t *recycle;
+    int last_id;
+    int count;
+} mx_recycle_t;
+
+
+typedef struct mx_recycle_item_s {
+    int id;
+    int expire;
+    mx_queue_item_t *item;
+} mx_recycle_item_t;
+
+
 struct mx_connection_s {
     int fd;
     mx_event_state state;
@@ -84,6 +98,8 @@ struct mx_connection_s {
     int itembytes;
     struct list_head watch;
     mx_send_item_phase phase;
+    int sent_recycle;
+    int recycle_id;
     mx_connection_t *free_next;
 };
 
@@ -105,6 +121,8 @@ typedef struct mx_daemon_s {
     int bgsave_rate;
     int changes_todisk;
     int dirty;
+    mx_recycle_t *recycle;
+    int recycle_expire;
     mx_connection_t *free_connections;
     int free_connections_count;
 } mx_daemon_t;

@@ -72,14 +72,18 @@ void mx_push_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count
 void mx_timer_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_watch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
+void mx_fetch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
+void mx_recycle_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 void mx_qsize_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count);
 
 mx_command_t mx_commands[] = {
-    {"push",  (sizeof("push")-1),  5, mx_push_handler},
-    {"timer", (sizeof("timer")-1), 5, mx_timer_handler},
-    {"watch", (sizeof("watch")-1), 2, mx_watch_handler},
-    {"pop",   (sizeof("pop")-1),   2, mx_pop_handler},
-    {"qsize", (sizeof("qsize")-1), 2, mx_qsize_handler},
+    {"push",    (sizeof("push")-1),    5, mx_push_handler},
+    {"timer",   (sizeof("timer")-1),   5, mx_timer_handler},
+    {"watch",   (sizeof("watch")-1),   2, mx_watch_handler},
+    {"pop",     (sizeof("pop")-1),     2, mx_pop_handler},
+    {"fetch",   (sizeof("fetch")-1),   2, mx_fetch_handler},
+    {"recycle", (sizeof("recycle")-1), 4, mx_recycle_handler},
+    {"qsize",   (sizeof("qsize")-1),   2, mx_qsize_handler},
     {NULL, 0, 0, NULL}
 };
 
@@ -246,8 +250,13 @@ void mx_send_item(mx_connection_t *conn, mx_queue_item_t *item)
 {
     char buf[128];
     int len;
-    
-    len = sprintf(buf, "+OK %d\r\n", item->length);
+
+    if (conn->sent_recycle) {
+        len = sprintf(buf, "+OK %d %d\r\n", conn->recycle_id, item->length);
+    } else {
+        len = sprintf(buf, "+OK %d\r\n", item->length);
+    }
+
     memcpy(conn->sendlast, buf, len);
     conn->sendlast += len;
 
@@ -442,7 +451,12 @@ send_body_flag:
             conn->sendpos = conn->sendbuf;
             conn->sendlast = conn->sendbuf;
 
-            free(conn->item);  /* free current job item */
+            if (!conn->sent_recycle) { /* not be recycle */
+                free(conn->item);  /* free current job */
+            } else {
+            	conn->sent_recycle = 0;
+            }
+
             conn->item = NULL;
             conn->itemptr = NULL;
             conn->itembytes = 0;
@@ -502,6 +516,7 @@ void mx_finish_recv_body(mx_connection_t *conn)
 
     if (item->delay > 0 && item->delay > mx_current_time) {
         mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
+        mx_update_dirty();
     } else {
         if (item->delay > 0) {
             item->delay = 0;
@@ -626,6 +641,7 @@ mx_connection_t *mx_create_connection(int fd)
     conn->item = NULL;
     conn->itemptr = NULL;
     conn->itembytes = 0;
+    conn->sent_recycle = 0;
 
     if (aeCreateFileEvent(mx_daemon->event, conn->fd, AE_READABLE, mx_process_handler, conn) == -1) {
         mx_write_log(mx_log_notice, "Unable create file event, client fd(%d)", conn->fd);
@@ -642,6 +658,7 @@ mx_connection_t *mx_create_connection(int fd)
 int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
 {
     mx_queue_item_t *item;
+    mx_recycle_item_t *recycle;
     
     time(&mx_current_time);
     
@@ -672,10 +689,62 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         break;
     }
     
+    while (mx_skiplist_elements(mx_daemon->recycle->recycle) > 0) {
+        if (mx_skiplist_find_min(mx_daemon->recycle->recycle, (void **)&recycle) != SKL_STATUS_OK ||
+            recycle->expire > mx_current_time) {
+            break;
+        }
+        
+        free(recycle->item);
+        free(recycle);
+        mx_skiplist_delete_min(mx_daemon->recycle->recycle);
+        mx_daemon->recycle->count--;
+        
+        break;
+    }
+    
     (void)mx_try_bgsave_queue();
     
     return 100;
 }
+
+
+/*
+ * create a recycle item and return
+ */
+mx_recycle_item_t *mx_recycle_push()
+{
+    mx_recycle_item_t *item = malloc(sizeof(*item));
+    
+    if (item) {
+        item->id = mx_daemon->recycle->last_id++;
+        item->expire = mx_current_time + mx_daemon->recycle_expire;
+        if (mx_skiplist_insert(mx_daemon->recycle->recycle, item->id, item) != SKL_STATUS_OK) {
+            free(item);
+            return NULL;
+        }
+        mx_daemon->recycle->count++;
+    }
+    return item;
+}
+
+
+mx_recycle_t *mx_recycle_create()
+{
+    mx_recycle_t *recycle = malloc(sizeof(*recycle));
+    
+    if (recycle) {
+        recycle->recycle = mx_skiplist_create();
+        if (!recycle->recycle) {
+            free(recycle);
+            return NULL;
+        }
+        recycle->last_id = 0;
+        recycle->count = 0;
+    }
+    return recycle;
+}
+
 
 void mx_init_daemon()
 {
@@ -738,6 +807,12 @@ void mx_init_daemon()
     mx_daemon->delay_queue = mx_queue_create("__delay__", sizeof("__delay__") - 1);
     if (!mx_daemon->table) {
         mx_write_log(mx_log_error, "Unable create delay queue");
+        exit(-1);
+    }
+    
+    mx_daemon->recycle = mx_recycle_create();
+    if (!mx_daemon->recycle) {
+        mx_write_log(mx_log_error, "Unable create recycle");
         exit(-1);
     }
 
@@ -842,6 +917,16 @@ int mx_set_changes_todisk_handler(char *confval, void *data, int offset)
 }
 
 
+int mx_set_recycle_expire_handler(char *confval, void *data, int offset)
+{
+    mx_daemon->recycle_expire = atoi(confval);
+    if (mx_daemon->recycle_expire == 0) {
+        mx_daemon->recycle_expire = 60;
+    }
+    return 1;
+}
+
+
 mx_config_command_t mx_config_commands[] = {
     {"daemon", mx_set_daemon_handler, NULL, 0},
     {"port", mx_set_port_handler, NULL, 0},
@@ -849,6 +934,7 @@ mx_config_command_t mx_config_commands[] = {
     {"bgsave_filepath", mx_set_bgsave_filepath_handler, NULL, 0},
     {"bgsave_rate", mx_set_bgsave_rate_handler, NULL, 0},
     {"changes_todisk", mx_set_changes_todisk_handler, NULL, 0},
+    {"recycle_expire", mx_set_recycle_expire_handler, NULL, 0},
     {NULL, NULL, NULL, 0}
 };
 
@@ -1076,6 +1162,8 @@ void mx_init_main()
     mx_daemon->changes_todisk = 0;
     mx_daemon->dirty = 0;
 
+    mx_daemon->recycle = NULL;
+    mx_daemon->recycle_expire = 60;
     mx_daemon->free_connections = NULL;
     mx_daemon->free_connections_count = 0;
 }
@@ -1201,6 +1289,8 @@ mx_queue_item_t *mx_queue_item_create(int prival, int delay, mx_queue_t *belong,
 #define MX_JOB_CREATE_FAILED    "-ERR Job create failed"
 
 #define MX_DATE_FORMAT_INVAILD  "-ERR Date format invaild"
+#define MX_NOT_ENOUGH_MEMORY    "-ERR Not enough memory"
+#define MX_RECYCLEID_NOTFOUND   "-ERR Recycle id not found"
 
 
 static int mx_strtotime(int *delay, const char *buf, const char *fmt)
@@ -1358,6 +1448,87 @@ void mx_pop_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
     mx_queue_delete_head(queue);
     mx_update_dirty();
     return;
+}
+
+
+void mx_fetch_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+{
+    mx_queue_t *queue;
+    mx_queue_item_t *item;
+    mx_recycle_item_t *recycle;
+
+    if (hash_lookup(mx_daemon->table, tokens[1].value, (void **)&queue) == -1) {
+        mx_send_reply_return(conn, MX_QUEUE_NOTFOUND);
+    }
+
+    if (!mx_queue_fetch_head(queue, (void **)&item)) {
+        mx_send_reply_return(conn, MX_QUEUE_EMPTY);
+    }
+
+    recycle = mx_recycle_push(); /* push into recycle */
+    if (!recycle) {
+        mx_send_reply_return(conn, MX_NOT_ENOUGH_MEMORY);
+    }
+    recycle->item = item;
+    conn->sent_recycle = 1; /* don't free job after sent */
+    conn->recycle_id = recycle->id;
+
+    mx_send_item(conn, item);
+    mx_queue_delete_head(queue);
+    mx_update_dirty();
+
+    return;
+}
+
+
+void mx_recycle_handler(mx_connection_t *conn, mx_token_t *tokens, int tokens_count)
+{
+    int recycle_id, prio_value, delay_time;
+    mx_recycle_item_t *recycle;
+    mx_queue_item_t *item;
+    
+    recycle_id = atoi(tokens[1].value); /* recycle id */
+    prio_value = atoi(tokens[2].value); /* job item's priority */
+    delay_time = atoi(tokens[3].value); /* job item's size */
+    
+    if (mx_skiplist_delete_key(mx_daemon->recycle->recycle, recycle_id, (void **)&recycle) != SKL_STATUS_OK) {
+	    mx_send_reply_return(conn, MX_RECYCLEID_NOTFOUND);
+	}
+
+    item = recycle->item;
+    free(recycle);
+
+    if (delay_time > 0) {
+        item->delay = mx_current_time + delay_time;
+    } else {
+        item->delay = 0;
+    }
+
+    if (item->delay > 0 && item->delay > mx_current_time) {
+        mx_queue_insert(mx_daemon->delay_queue, item->delay, item); /* insert delay queue */
+        mx_update_dirty();
+    } else {
+        if (item->delay > 0) {
+            item->delay = 0;
+        }
+        /* watcher list was not empty */
+        if (!list_empty(&(item->belong->watcher)))
+        {
+            mx_connection_t *watcher;
+
+            watcher = list_entry(item->belong->watcher.next, mx_connection_t, watch);
+            watcher->flag = 0;
+            list_del(&watcher->watch);
+
+            mx_send_item(watcher, item);
+        } else {
+            mx_queue_insert(item->belong, item->prival, item); /* insert ready queue */
+            mx_update_dirty();
+        }
+    }
+
+    mx_daemon->recycle->count--;
+    mx_send_reply_return(conn, "+OK");
 }
 
 

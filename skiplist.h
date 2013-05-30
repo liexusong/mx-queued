@@ -8,6 +8,7 @@
 typedef struct mx_skiplist_node_s mx_skiplist_node_t;
 typedef struct mx_skiplist_s mx_skiplist_t;
 typedef struct mx_skiplist_iterator_s mx_skiplist_iterator_t;
+typedef void (*mx_skiplist_destroy_handler_t)(void *);
 
 struct mx_skiplist_node_s {
     int   key;
@@ -48,7 +49,7 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec);
 int mx_skiplist_find_min(mx_skiplist_t *list, void **rec);
 void mx_skiplist_delete_min(mx_skiplist_t *list);
 int mx_skiplist_find_key(mx_skiplist_t *list, int key, void **rec);
-int mx_skiplist_delete_key(mx_skiplist_t *list, int key);
+int mx_skiplist_delete_key(mx_skiplist_t *list, int key, void **rec);
 int mx_skiplist_find_node(mx_skiplist_t *list, int key, mx_skiplist_node_t **node);
 int mx_skiplist_get_iterator(mx_skiplist_t *list,
     mx_skiplist_iterator_t *iterator, int key, int limit);
