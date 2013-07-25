@@ -1,6 +1,6 @@
 <h1>mx-queued</h1>
 
-The fast message queue server
+Fast and simple message queue server
 
 -------------------------------------------------
 
@@ -78,3 +78,5 @@ $ make
 
 联系QQ: 280259971<br />
 新浪微博: @Yuk_松
+
+顺便卖个广告, 我写的书《PHP核心技术与最佳实践》, 购买地址: http://item.jd.com/11123177.html
