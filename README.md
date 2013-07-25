@@ -53,6 +53,21 @@ $ cd mx-queue/
 $ make
 </code></pre>
 
+
+配置参数：
+<pre><code>
+--daemon                      是否使用守护进程模式
+--port &lt;port&gt;                 监听的端口
+--bgsave-enable               是否开启持久化功能
+--bgsave-times &lt;seconds&gt;      多长时间进行一次持久化(单位为:秒)
+--bgsave-changes &lt;number&gt;     有多少次数据更新进行一次持久化(也就是说没达到bgsave-times也进行)
+--bgsave-path &lt;path&gt;          持久化数据时保存的路径
+--recycle-timeout &lt;seconds&gt;   回收站的周期
+--log-level &lt;level&gt;           日志等级, 可以选择(error|notice|debug)这几个
+--version                     打印服务器的版本
+--help                        打印使用指南
+</code></pre>
+
 -------------------------------------------------
 
 联系QQ: 280259971<br />
