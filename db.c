@@ -32,7 +32,7 @@ struct mx_job_header {
     int prival;
     int timeout;
     int qlen;
-    int vlen;
+    int jlen;
 };
 
 
@@ -48,7 +48,7 @@ int mx_save_job(mx_job_t *job)
     header.prival = job->prival;
     header.timeout = job->timeout;
     header.qlen = queue->name_len;
-    header.vlen = job->length;
+    header.jlen = job->length;
 
     if (fwrite(&header, sizeof(header), 1, mx_dbfp) != 1) return -1;      /* write job header */
     if (fwrite(queue->name, queue->name_len, 1, mx_dbfp) != 1) return -1; /* write queue name */
@@ -218,15 +218,13 @@ int mx_try_bgsave_queue()
             }
 
             mx_global->bgsave_pid = -1;
-
-            return mx_try_bgsave_queue();
         }
 
     } else {
-        if ((mx_current_time - mx_global->last_bgsave_time > mx_global->bgsave_times && 
+        if (((mx_current_time - mx_global->last_bgsave_time) > mx_global->bgsave_times && 
              mx_global->dirty > 0) || mx_global->dirty >= mx_global->bgsave_changes)
         {
-            mx_write_log(mx_log_debug, "do bgsave queue starting");
+            mx_write_log(mx_log_debug, "background save queue starting");
             return mx_bgsave_queue();
         }
     }
@@ -244,6 +242,7 @@ int mx_load_queues()
     int count = 0;
     char tbuf[128];
     FILE *fp;
+    int ret;
 
     if (!mx_global->bgsave_filepath || 
         !(fp = fopen(mx_global->bgsave_filepath, "rb")))
@@ -260,7 +259,7 @@ int mx_load_queues()
         fclose(fp);
         return -1;
     }
-    
+
     while (1)
     {
         if (fread(&header, sizeof(header), 1, fp) != 1) {
@@ -268,7 +267,7 @@ int mx_load_queues()
         }
 
         /* finish and break */
-        if (header.qlen == 0 && header.vlen == 0) {
+        if (header.qlen == 0 || header.jlen == 0) {
             break;
         }
 
@@ -277,6 +276,7 @@ int mx_load_queues()
         }
 
         tbuf[header.qlen] = 0;
+
         /* find the queue from queue table */
         if (hash_lookup(mx_global->queue_table, tbuf, (void **)&queue) == -1)
         {
@@ -290,7 +290,7 @@ int mx_load_queues()
             }
         }
         
-        job = mx_job_create(queue, header.prival, header.timeout, header.vlen);
+        job = mx_job_create(queue, header.prival, header.timeout, header.jlen);
         if (!job) {
             goto failed;
         }
@@ -303,16 +303,21 @@ int mx_load_queues()
         job->body[job->length+1] = LF_CHR;
         
         if (job->timeout > 0 && job->timeout > current_time) {
-            mx_skiplist_insert(mx_global->delay_queue, job->timeout, job);
+            ret = mx_skiplist_insert(mx_global->delay_queue, job->timeout, job);
 
         } else {
             job->timeout = 0;
-            mx_skiplist_insert(queue->list, job->prival, job);
+            ret = mx_skiplist_insert(queue->list, job->prival, job);
         }
+        
+        if (ret != 0) {
+            goto failed;
+        }
+
         count++;
     }
 
-    mx_write_log(mx_log_debug, "finish load (%d) items from disk", count);
+    mx_write_log(mx_log_debug, "finish load (%d)jobs from disk", count);
     fclose(fp);
     return 0;
 

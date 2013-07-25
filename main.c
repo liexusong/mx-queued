@@ -789,6 +789,8 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
     mx_job_t *job;
     int ret;
 
+    (void)time(&mx_current_time);
+
     /*
      * push timeout job into ready queue
      */
@@ -821,11 +823,8 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         mx_skiplist_delete_min(mx_global->recycle_queue);
         mx_job_free(job);
     }
-    
+
     mx_try_bgsave_queue();
-
-    (void)time(&mx_current_time);
-
     mx_timer_calls++;
 
     return 100;
@@ -838,10 +837,12 @@ int mx_server_startup()
     struct sockaddr_in addr;
     int flags = 1;
 
-    mx_global->log = fopen(MX_DEFAULT_LOG_PATH, "w+");
-    if (NULL == mx_global->log) {
-        fprintf(stderr, "[error] failed to open log file\n");
-        return -1;
+    if (mx_global->daemon_mode) {
+        mx_global->log = fopen(MX_DEFAULT_LOG_PATH, "w+");
+        if (NULL == mx_global->log) {
+            fprintf(stderr, "[error] failed to open log file\n");
+            return -1;
+        }
     }
 
     mx_global->sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -977,7 +978,6 @@ void mx_default_init()
     mx_global->sock = -1;
     mx_global->daemon_mode = 0;
     mx_global->port = MX_DEFAULT_PORT;
-    mx_global->log = NULL;
     mx_global->event = NULL;
     mx_global->cmd_table = NULL;
     mx_global->queue_table = NULL;
@@ -985,15 +985,16 @@ void mx_default_init()
     mx_global->recycle_queue = NULL;
 
     mx_global->bgsave_enable = 0;
-    mx_global->bgsave_times = 60;
-    mx_global->bgsave_changes = 10;
+    mx_global->bgsave_times = 300;
+    mx_global->bgsave_changes = 1000;
     mx_global->bgsave_filepath = MX_DEFAULT_BGSAVE_PATH;
     mx_global->bgsave_pid = -1;
-    mx_global->last_bgsave_time = 0;
+    mx_global->last_bgsave_time = time(NULL);
     mx_global->dirty = 0;
 
     mx_global->last_recycle_id = 1;
     mx_global->recycle_timeout = MX_RECYCLE_TIMEOUT;
+    mx_global->log = NULL;
     mx_global->log_level = mx_log_error;
 
     (void)time(&mx_current_time);
