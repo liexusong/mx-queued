@@ -68,6 +68,12 @@ $ make
 --help                        打印使用指南
 </code></pre>
 
+
+使用例子：
+<pre><code>
+./mx-queued --log-level debug --bgsave-enable
+</code></pre>
+
 -------------------------------------------------
 
 联系QQ: 280259971<br />
