@@ -1,2 +1,2 @@
 all:
-	gcc ae.c queued.c save.c skiplist.c hash.c -g -o mx-queue
+	gcc ae.c main.c skiplist.c hash.c db.c -g -o queued

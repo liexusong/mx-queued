@@ -304,7 +304,8 @@ void hash_destroy(HashTable *htb, hash_destroy_function destroy) {
         node = htb->bucket[i];
         while (node) {
             next = node->next;
-            destroy(node->value);
+            if (destroy)
+                destroy(node->value);
             free(node);
             node = next;
         }

@@ -21,19 +21,36 @@
 #include <stdlib.h>
 #include "skiplist.h"
 
-#define compLT(a,b) (a < b)
-#define compEQ(a,b) (a == b)
+#ifdef compLT
+#undef compLT
+#endif
 
-#define zmalloc(size)   malloc(size)
-#define zfree(ptr)      free(ptr)
+#ifdef compEQ
+#undef compEQ
+#endif
 
-#define __root__(list)  ((list)->root)
+#define compLT(a, b) (a < b)
+#define compEQ(a, b) (a == b)
+
+#ifdef zmalloc
+#undef zmalloc
+#endif
+
+#ifdef zfree
+#undef zfree
+#endif
+
+#define zmalloc(s) malloc(s)
+#define zfree(p) free(p)
 
 #define MAXLEVEL 32
 
 
 /**
  * Insert new node into skiplist
+ * @param list, SkipList object
+ * @param key, the index key
+ * @param rec, the value
  */
 int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
 {
@@ -41,9 +58,9 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
     mx_skiplist_node_t *update[MAXLEVEL+1];
     mx_skiplist_node_t *x;
 
-    x = __root__(list);
-    for (i = list->listLevel; i >= 0; i--) {
-        while (x->forward[i] != __root__(list) &&
+    x = list->root;
+    for (i = list->level; i >= 0; i--) {
+        while (x->forward[i] != list->root &&
                compLT(x->forward[i]->key, key))
             x = x->forward[i];
         update[i] = x;
@@ -51,12 +68,12 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
 
     for (newLevel = 0;
          rand() < (RAND_MAX / 2) && newLevel < MAXLEVEL; 
-         newLevel++);
+         newLevel++) /* void */ ;
 
-    if (newLevel > list->listLevel) {
-        for (i = list->listLevel + 1; i <= newLevel; i++)
-            update[i] = __root__(list); /* update root node's forwards */
-        list->listLevel = newLevel;
+    if (newLevel > list->level) {
+        for (i = list->level + 1; i <= newLevel; i++)
+            update[i] = list->root; /* update root node's forwards */
+        list->level = newLevel;
     }
 
     if ((x = zmalloc(sizeof(mx_skiplist_node_t) + newLevel * sizeof(mx_skiplist_node_t *))) == 0)
@@ -68,9 +85,9 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
         x->forward[i] = update[i]->forward[i];
         update[i]->forward[i] = x;
     }
-    
-    list->elements++;
-    
+
+    list->size++;
+
     return SKL_STATUS_OK;
 }
 
@@ -79,9 +96,9 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
  */
 int mx_skiplist_find_min(mx_skiplist_t *list, void **rec)
 {
-    if (__root__(list)->forward[0] == __root__(list)) /* empty */
+    if (list->root->forward[0] == list->root) /* empty */
         return SKL_STATUS_KEY_NOT_FOUND;
-    *rec = __root__(list)->forward[0]->rec;
+    *rec = list->root->forward[0]->rec;
     return SKL_STATUS_OK;
 }
 
@@ -94,21 +111,24 @@ void mx_skiplist_delete_min(mx_skiplist_t *list)
     int i, newLevel;
 
     /* skiplist empty */
-    if (__root__(list)->forward[0] == __root__(list)) return;
+    if (list->root->forward[0] == list->root) return;
 
-    node = __root__(list)->forward[0]; /* First node */
-    for (i = 0; i <= list->listLevel; i++) {
-        if (__root__(list)->forward[i] == node) {
-            __root__(list)->forward[i] = node->forward[i];
+    node = list->root->forward[0]; /* first node */
+    for (i = 0; i <= list->level; i++) {
+        if (list->root->forward[i] == node) {
+            list->root->forward[i] = node->forward[i];
         } else {
             break;
         }
     }
-    
-    while ((list->listLevel > 0) &&
-           (__root__(list)->forward[list->listLevel] == __root__(list)))
-        list->listLevel--;
-    list->elements--;
+
+    while ((list->level > 0) &&
+           (list->root->forward[list->level] == list->root))
+    {
+        list->level--;
+    }
+
+    list->size--;
     zfree(node);
 }
 
@@ -118,19 +138,20 @@ void mx_skiplist_delete_min(mx_skiplist_t *list)
 int mx_skiplist_find_key(mx_skiplist_t *list, int key, void **rec)
 {
     int i;
-    mx_skiplist_node_t *x = __root__(list);
+    mx_skiplist_node_t *x = list->root;
 
-    for (i = list->listLevel; i >= 0; i--) {
-        while (x->forward[i] != __root__(list) 
+    for (i = list->level; i >= 0; i--) {
+        while (x->forward[i] != list->root 
           && compLT(x->forward[i]->key, key))
             x = x->forward[i];
     }
     
     x = x->forward[0];
-    if (x != __root__(list) && compEQ(x->key, key)) {
+    if (x != list->root && compEQ(x->key, key)) {
         *rec = x->rec;
         return SKL_STATUS_OK;
     }
+
     return SKL_STATUS_KEY_NOT_FOUND;
 }
 
@@ -142,31 +163,34 @@ int mx_skiplist_delete_key(mx_skiplist_t *list, int key, void **rec)
     int i;
     mx_skiplist_node_t *update[MAXLEVEL+1], *x;
 
-    x = __root__(list);
-    for (i = list->listLevel; i >= 0; i--) {
-        while (x->forward[i] != __root__(list) 
+    x = list->root;
+    for (i = list->level; i >= 0; i--) {
+        while (x->forward[i] != list->root 
                 && compLT(x->forward[i]->key, key))
             x = x->forward[i];
         update[i] = x;
     }
-    
+
     x = x->forward[0];
-    if (x == __root__(list) || !compEQ(x->key, key))
+    if (x == list->root || !compEQ(x->key, key))
         return SKL_STATUS_KEY_NOT_FOUND;
 
-    for (i = 0; i <= list->listLevel; i++) {
+    for (i = 0; i <= list->level; i++) {
         if (update[i]->forward[i] != x) break;
         update[i]->forward[i] = x->forward[i];
     }
 
-    if (rec)
-        *rec = x->rec;
+    if (rec) *rec = x->rec;
+
     zfree(x);
 
-    while ((list->listLevel > 0) &&
-           (__root__(list)->forward[list->listLevel] == __root__(list)))
-        list->listLevel--;
-    list->elements--;
+    while ((list->level > 0) &&
+           (list->root->forward[list->level] == list->root))
+    {
+        list->level--;
+    }
+
+    list->size--;
 
     return SKL_STATUS_OK;
 }
@@ -177,18 +201,20 @@ int mx_skiplist_delete_key(mx_skiplist_t *list, int key, void **rec)
 int mx_skiplist_find_node(mx_skiplist_t *list, int key, mx_skiplist_node_t **node)
 {
     int i;
-    mx_skiplist_node_t *x = __root__(list);
+    mx_skiplist_node_t *x = list->root;
 
-    for (i = list->listLevel; i >= 0; i--) {
-        while (x->forward[i] != __root__(list) 
+    for (i = list->level; i >= 0; i--) {
+        while (x->forward[i] != list->root 
           && compLT(x->forward[i]->key, key))
             x = x->forward[i];
     }
+
     x = x->forward[0];
-    if (x != __root__(list) && compEQ(x->key, key)) {
+    if (x != list->root && compEQ(x->key, key)) {
         *node = x;
         return SKL_STATUS_OK;
     }
+
     return SKL_STATUS_KEY_NOT_FOUND;
 }
 
@@ -216,18 +242,18 @@ int mx_skiplist_get_iterator(mx_skiplist_t *list,
  */
 int mx_skiplist_level(mx_skiplist_t *list)
 {
-    if (list)
-        return list->listLevel;
+    if (NULL != list)
+        return list->level;
     return -1;
 }
 
 /**
  * Get skiplist elements count
  */
-int mx_skiplist_elements(mx_skiplist_t *list)
+int mx_skiplist_size(mx_skiplist_t *list)
 {
-    if (list)
-        return list->elements;
+    if (NULL != list)
+        return list->size;
     return -1;
 }
 
@@ -236,10 +262,9 @@ int mx_skiplist_elements(mx_skiplist_t *list)
  */
 int mx_skiplist_empty(mx_skiplist_t *list)
 {
-	if (list && list->elements <= 0) {
-		return 1;
-	}
-	return 0;
+    if (list && list->size <= 0)
+        return 1;
+    return 0;
 }
 
 /**
@@ -249,38 +274,44 @@ mx_skiplist_t *mx_skiplist_create()
 {
     mx_skiplist_t *list;
     int i;
-    
+
     list = zmalloc(sizeof(*list));
     if (!list) {
         return NULL;
     }
-    
-    if ((__root__(list) = zmalloc(sizeof(mx_skiplist_node_t) + 
-            MAXLEVEL*sizeof(mx_skiplist_node_t *))) == (void *)0)
+
+    if ((list->root = zmalloc(sizeof(mx_skiplist_node_t) + 
+            MAXLEVEL * sizeof(mx_skiplist_node_t *))) == NULL)
     {
         zfree(list);
         return NULL;
     }
-    
-    for (i = 0; i <= MAXLEVEL; i++)
-        __root__(list)->forward[i] = __root__(list); /* point to myself */
-    list->listLevel = 0;
-    list->elements = 0;
-    
+
+    for (i = 0; i <= MAXLEVEL; i++) {
+        list->root->forward[i] = list->root; /* point to root */
+    }
+
+    list->level = 0;
+    list->size = 0;
+
     return list;
 }
 
+/*
+ * skiplist destroy function
+ */
 void mx_skiplist_destroy(mx_skiplist_t *list, mx_skiplist_destroy_handler_t destroy_callback)
 {
-	void *value;
-	
-	while (!mx_skiplist_empty(list)) {
-		mx_skiplist_find_min(list, (void **)&value);
-		mx_skiplist_delete_min(list);
-		if (destroy_callback) {
-			destroy_callback(value);
-		}
-	}
-	zfree(list);
+    void *value;
+
+    while (!mx_skiplist_empty(list)) {
+        mx_skiplist_find_min(list, (void **)&value);
+        mx_skiplist_delete_min(list);
+        if (destroy_callback) {
+            destroy_callback(value);
+        }
+    }
+    zfree(list);
 }
 
+/* End of file */
