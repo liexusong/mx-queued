@@ -1,6 +1,13 @@
 /*
  * Copyright (c) 2012 - 2013, Jackson Lie <liexusong@qq.com>
  * All rights reserved.
+ *  __   __  __   __         _______  __   __  _______  __   __  _______  ______  
+ * |  |_|  ||  |_|  |       |       ||  | |  ||       ||  | |  ||       ||      | 
+ * |       ||       | ____  |   _   ||  | |  ||    ___||  | |  ||    ___||  _    |
+ * |       ||       ||____| |  | |  ||  |_|  ||   |___ |  |_|  ||   |___ | | |   |
+ * |       | |     |        |  |_|  ||       ||    ___||       ||    ___|| |_|   |
+ * | ||_|| ||   _   |       |      | |       ||   |___ |       ||   |___ |       |
+ * |_|   |_||__| |__|       |____||_||_______||_______||_______||_______||______|
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -23,16 +30,15 @@
 #include <errno.h>
 #include "global.h"
 
-/* background save queue feature support */
+/* background save queues feature support */
 
 #define MX_BGSAVE_HEADER "MXQUEUED/0.5"
-
 
 struct mx_job_header {
     int prival;
     int timeout;
-    int qlen;
-    int jlen;
+    int qlen;  /* queue name's length */
+    int jlen;  /* job body's length */
 };
 
 
@@ -159,7 +165,7 @@ failed:
 }
 
 
-static int mx_bgsave_queue()
+static int mx_bgsave_queues()
 {
     pid_t pid;
     
@@ -173,23 +179,23 @@ static int mx_bgsave_queue()
     pid = fork();
     switch (pid) {
     case -1:
-        mx_write_log(mx_log_error, "can not fork todo background save queue");
+        mx_write_log(mx_log_error, "can not fork process to do background save");
         return -1;
     case 0:
         if (mx_do_bgsave_queue() != 0)
             exit(-1);
         exit(0);
     default: /* parent */
-        mx_global->bgsave_pid = pid;
-        mx_global->dirty = 0;
+        mx_global->bgsave_pid = pid; /* save the background save process ID */
+        mx_global->dirty = 0; /* clean dirty */
         break;
     }
-    
+
     return 0;
 }
 
 
-int mx_try_bgsave_queue()
+int mx_try_bgsave_queues()
 {
     if (!mx_global->bgsave_enable) { /* background save queue feature disable */
         return 0;
@@ -225,7 +231,7 @@ int mx_try_bgsave_queue()
              mx_global->dirty > 0) || mx_global->dirty >= mx_global->bgsave_changes)
         {
             mx_write_log(mx_log_debug, "background save queue starting");
-            return mx_bgsave_queue();
+            return mx_bgsave_queues();
         }
     }
 
@@ -242,7 +248,7 @@ int mx_load_queues()
     int count = 0;
     char tbuf[128];
     FILE *fp;
-    int ret;
+    int retval;
 
     if (!mx_global->bgsave_filepath || 
         !(fp = fopen(mx_global->bgsave_filepath, "rb")))
@@ -289,28 +295,28 @@ int mx_load_queues()
                 goto failed;
             }
         }
-        
+
         job = mx_job_create(queue, header.prival, header.timeout, header.jlen);
         if (!job) {
             goto failed;
         }
-        
+
         if (fread(job->body, job->length, 1, fp) != 1) {
             goto failed;
         }
-        
+
         job->body[job->length] = CR_CHR;
         job->body[job->length+1] = LF_CHR;
-        
+
         if (job->timeout > 0 && job->timeout > current_time) {
-            ret = mx_skiplist_insert(mx_global->delay_queue, job->timeout, job);
+            retval = mx_skiplist_insert(mx_global->delay_queue, job->timeout, job);
 
         } else {
             job->timeout = 0;
-            ret = mx_skiplist_insert(queue->list, job->prival, job);
+            retval = mx_skiplist_insert(queue->list, job->prival, job);
         }
-        
-        if (ret != 0) {
+
+        if (retval != 0) {
             goto failed;
         }
 
@@ -322,7 +328,7 @@ int mx_load_queues()
     return 0;
 
 failed:
-    mx_write_log(mx_log_error, "failed to read data from disk, message(%s)", strerror(errno));
+    mx_write_log(mx_log_error, "failed to read jobs from disk, message(%s)", strerror(errno));
     fclose(fp);
     return -1;
 }

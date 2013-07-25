@@ -824,7 +824,7 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
         mx_job_free(job);
     }
 
-    mx_try_bgsave_queue();
+    mx_try_bgsave_queues();
     mx_timer_calls++;
 
     return 100;
