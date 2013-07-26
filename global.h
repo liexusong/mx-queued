@@ -77,6 +77,7 @@ struct mx_global_s {
     int recycle_timeout;
 
     FILE *log;
+    char *log_path;
     int log_level;
 };
 

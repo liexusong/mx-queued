@@ -9,6 +9,7 @@ typedef struct mx_skiplist_node_s mx_skiplist_node_t;
 typedef struct mx_skiplist_s mx_skiplist_t;
 typedef struct mx_skiplist_iterator_s mx_skiplist_iterator_t;
 typedef void (*mx_skiplist_destroy_handler_t)(void *);
+typedef int (*mx_skiplist_comp_handler_t)(int, int);
 
 struct mx_skiplist_node_s {
     int   key;
@@ -20,6 +21,7 @@ struct mx_skiplist_s {
     mx_skiplist_node_t *root;
     int level;
     int size;
+    mx_skiplist_comp_handler_t cmp;
 };
 
 struct mx_skiplist_iterator_s {
@@ -37,6 +39,10 @@ enum SKL_STATUS {
 };
 
 
+#define MX_SKIPLIST_MAX_TYPE  1
+#define MX_SKIPLIST_MIN_TYPE  2
+
+
 #define SKIPLIST_ITERATOR_FOREACH(iterator, item)                                            \
         for ((iterator)->current = (iterator)->begin;                                        \
              (iterator)->limit != 0 && (iterator)->current != __ROOT__((iterator)->list) &&  \
@@ -46,8 +52,8 @@ enum SKL_STATUS {
 
 
 int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec);
-int mx_skiplist_find_min(mx_skiplist_t *list, void **rec);
-void mx_skiplist_delete_min(mx_skiplist_t *list);
+int mx_skiplist_find_top(mx_skiplist_t *list, void **rec);
+void mx_skiplist_delete_top(mx_skiplist_t *list);
 int mx_skiplist_find_key(mx_skiplist_t *list, int key, void **rec);
 int mx_skiplist_delete_key(mx_skiplist_t *list, int key, void **rec);
 int mx_skiplist_find_node(mx_skiplist_t *list, int key, mx_skiplist_node_t **node);
@@ -56,7 +62,7 @@ int mx_skiplist_get_iterator(mx_skiplist_t *list,
 int mx_skiplist_level(mx_skiplist_t *list);
 int mx_skiplist_size(mx_skiplist_t *list);
 int mx_skiplist_empty(mx_skiplist_t *list);
-mx_skiplist_t *mx_skiplist_create();
+mx_skiplist_t *mx_skiplist_create(int type);
 void mx_skiplist_destroy(mx_skiplist_t *list, void (*destroy_callback)(void *));
 
 #endif

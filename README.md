@@ -11,7 +11,7 @@ Fast and simple message queue server
   &lt;job_body&gt;\r\n
 </code></pre>
 queue_name: 队列的名称<br />
-priority_value: job的优先值, 值越大越迟获取到<br />
+priority_value: job的优先值, 值越大越优先值越高<br />
 delay_time: job要延时的秒数<br />
 job_size: job的大小<br />
 job_body: job的数据体<br />
@@ -63,6 +63,7 @@ $ make
 --bgsave-changes &lt;number&gt;     有多少次数据更新进行一次持久化(也就是说没达到bgsave-times也进行)
 --bgsave-path &lt;path&gt;          持久化数据时保存的路径
 --recycle-timeout &lt;seconds&gt;   回收站的周期
+--log-path &lt;path&gt;             日志保存的路径
 --log-level &lt;level&gt;           日志等级, 可以选择(error|notice|debug)这几个
 --version                     打印服务器的版本
 --help                        打印使用指南

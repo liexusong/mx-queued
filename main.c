@@ -729,8 +729,8 @@ void mx_debug_connection(mx_connection_t *c)
        "    phase: %d\n"
        "    revent_handler: %p\n"
        "    wevent_handler: %p\n"
-       "    revent_set: %d\n"
-       "    wevent_set: %d\n\n",
+       "    revent_set: %u\n"
+       "    wevent_set: %u\n\n",
        c->sock, c->state,
        c->recvbuf, (c->recvlast - c->recvpos),
        c->sendbuf, (c->sendlast - c->sendpos),
@@ -796,7 +796,7 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
      */
     while (!mx_skiplist_empty(mx_global->delay_queue))
     {
-        ret = mx_skiplist_find_min(mx_global->delay_queue, (void **)&job);
+        ret = mx_skiplist_find_top(mx_global->delay_queue, (void **)&job);
         if (ret == SKL_STATUS_KEY_NOT_FOUND ||
             job->timeout > mx_current_time)
         {
@@ -805,7 +805,7 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
 
         job->timeout = 0;
         mx_skiplist_insert(job->belong->list, job->prival, job);
-        mx_skiplist_delete_min(mx_global->delay_queue);
+        mx_skiplist_delete_top(mx_global->delay_queue);
     }
 
     /*
@@ -813,14 +813,14 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
      */
     while (!mx_skiplist_empty(mx_global->recycle_queue))
     {
-        ret = mx_skiplist_find_min(mx_global->recycle_queue, (void **)&job);
+        ret = mx_skiplist_find_top(mx_global->recycle_queue, (void **)&job);
         if (ret == SKL_STATUS_KEY_NOT_FOUND ||
             job->timeout > mx_current_time)
         {
             break;
         }
 
-        mx_skiplist_delete_min(mx_global->recycle_queue);
+        mx_skiplist_delete_top(mx_global->recycle_queue);
         mx_job_free(job);
     }
 
@@ -838,7 +838,7 @@ int mx_server_startup()
     int flags = 1;
 
     if (mx_global->daemon_mode) {
-        mx_global->log = fopen(MX_DEFAULT_LOG_PATH, "w+");
+        mx_global->log = fopen(mx_global->log_path, "w+");
         if (NULL == mx_global->log) {
             fprintf(stderr, "[error] failed to open log file\n");
             return -1;
@@ -889,13 +889,13 @@ int mx_server_startup()
         goto failed;
     }
 
-    mx_global->delay_queue = mx_skiplist_create();
+    mx_global->delay_queue = mx_skiplist_create(MX_SKIPLIST_MIN_TYPE);
     if (!mx_global->delay_queue) {
         mx_write_log(mx_log_error, "failed to create delay queue");
         goto failed;
     }
 
-    mx_global->recycle_queue = mx_skiplist_create();
+    mx_global->recycle_queue = mx_skiplist_create(MX_SKIPLIST_MIN_TYPE);
     if (!mx_global->recycle_queue) {
         mx_write_log(mx_log_error, "failed to create recycle queue");
         goto failed;
@@ -994,7 +994,9 @@ void mx_default_init()
 
     mx_global->last_recycle_id = 1;
     mx_global->recycle_timeout = MX_RECYCLE_TIMEOUT;
+
     mx_global->log = NULL;
+    mx_global->log_path = MX_DEFAULT_LOG_PATH;
     mx_global->log_level = mx_log_error;
 
     (void)time(&mx_current_time);
@@ -1011,6 +1013,7 @@ void mx_usage(void)
     printf("    --bgsave-changes <number>     how many data changes background save will take place.\n");
     printf("    --bgsave-path <path>          background save path.\n");
     printf("    --recycle-timeout <seconds>   how long the recycle job life.\n");
+    printf("    --log-path <path>             log save path.\n");
     printf("    --log-level <level>           log level (error|notice|debug).\n");
     printf("    --version                     print this current version and exit.\n");
     printf("    --help                        print this help and exit.\n");
@@ -1035,6 +1038,7 @@ const struct option long_options[] = {
     {"bgsave-changes",  1, NULL, 'c'},
     {"bgsave-path",     1, NULL, 'P'},
     {"recycle-timeout", 1, NULL, 'r'},
+    {"log-path",        1, NULL, 'l'},
     {"log-level",       1, NULL, 'L'},
     {NULL,              0, NULL, 0  }
 };
@@ -1090,6 +1094,13 @@ int main(int argc, char *argv[])
             mx_global->bgsave_filepath = strdup(optarg);
             if (mx_global->bgsave_filepath == NULL) {
                 fprintf(stderr, "[error] can not duplicate bgsave path.\n");
+                exit(-1);
+            }
+            break;
+        case 'l':
+            mx_global->log_path = strdup(optarg);
+            if (mx_global->log_path == NULL) {
+                fprintf(stderr, "[error] can not duplicate log path.\n");
                 exit(-1);
             }
             break;
@@ -1178,7 +1189,7 @@ mx_queue_t *mx_queue_create(char *name, int name_len)
     
     queue = malloc(sizeof(*queue) + name_len + 1);
     if (queue) {
-        queue->list = mx_skiplist_create();
+        queue->list = mx_skiplist_create(MX_SKIPLIST_MAX_TYPE);
         if (!queue->list) {
             free(queue);
             return NULL;
@@ -1365,7 +1376,7 @@ void mx_dequeue_comm_handler(mx_connection_t *c, char *name, int touch)
         return;
     }
 
-    ret = mx_skiplist_find_min(queue->list, (void **)&job);
+    ret = mx_skiplist_find_top(queue->list, (void **)&job);
     if (ret == SKL_STATUS_KEY_NOT_FOUND) {
         mx_send_reply(c, "-ERR the queue was empty");
         return;
@@ -1380,7 +1391,7 @@ void mx_dequeue_comm_handler(mx_connection_t *c, char *name, int touch)
     }
 
     mx_send_job(c, job);
-    mx_skiplist_delete_min(queue->list);
+    mx_skiplist_delete_top(queue->list);
 
     return;
 }

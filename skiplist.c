@@ -21,15 +21,10 @@
 #include <stdlib.h>
 #include "skiplist.h"
 
-#ifdef compLT
-#undef compLT
-#endif
-
 #ifdef compEQ
 #undef compEQ
 #endif
 
-#define compLT(a, b) (a < b)
 #define compEQ(a, b) (a == b)
 
 #ifdef zmalloc
@@ -44,6 +39,15 @@
 #define zfree(p) free(p)
 
 #define MAXLEVEL 32
+
+
+static inline int mx_skiplist_max_comp(int a, int b) {
+    return a > b;
+}
+
+static inline int mx_skiplist_min_comp(int a, int b) {
+    return a < b;
+}
 
 
 /**
@@ -61,7 +65,7 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
     x = list->root;
     for (i = list->level; i >= 0; i--) {
         while (x->forward[i] != list->root &&
-               compLT(x->forward[i]->key, key))
+               list->cmp(x->forward[i]->key, key))
             x = x->forward[i];
         update[i] = x;
     }
@@ -94,7 +98,7 @@ int mx_skiplist_insert(mx_skiplist_t *list, int key, void *rec)
 /**
  * Get the min node of skiplist
  */
-int mx_skiplist_find_min(mx_skiplist_t *list, void **rec)
+int mx_skiplist_find_top(mx_skiplist_t *list, void **rec)
 {
     if (list->root->forward[0] == list->root) /* empty */
         return SKL_STATUS_KEY_NOT_FOUND;
@@ -105,7 +109,7 @@ int mx_skiplist_find_min(mx_skiplist_t *list, void **rec)
 /**
  * Delete the min node
  */
-void mx_skiplist_delete_min(mx_skiplist_t *list)
+void mx_skiplist_delete_top(mx_skiplist_t *list)
 {
     mx_skiplist_node_t *node;
     int i, newLevel;
@@ -142,7 +146,7 @@ int mx_skiplist_find_key(mx_skiplist_t *list, int key, void **rec)
 
     for (i = list->level; i >= 0; i--) {
         while (x->forward[i] != list->root 
-          && compLT(x->forward[i]->key, key))
+          && list->cmp(x->forward[i]->key, key))
             x = x->forward[i];
     }
     
@@ -166,7 +170,7 @@ int mx_skiplist_delete_key(mx_skiplist_t *list, int key, void **rec)
     x = list->root;
     for (i = list->level; i >= 0; i--) {
         while (x->forward[i] != list->root 
-                && compLT(x->forward[i]->key, key))
+                && list->cmp(x->forward[i]->key, key))
             x = x->forward[i];
         update[i] = x;
     }
@@ -205,7 +209,7 @@ int mx_skiplist_find_node(mx_skiplist_t *list, int key, mx_skiplist_node_t **nod
 
     for (i = list->level; i >= 0; i--) {
         while (x->forward[i] != list->root 
-          && compLT(x->forward[i]->key, key))
+          && list->cmp(x->forward[i]->key, key))
             x = x->forward[i];
     }
 
@@ -270,10 +274,22 @@ int mx_skiplist_empty(mx_skiplist_t *list)
 /**
  * Create new skiplist
  */
-mx_skiplist_t *mx_skiplist_create()
+mx_skiplist_t *mx_skiplist_create(int type)
 {
     mx_skiplist_t *list;
+    mx_skiplist_comp_handler_t cmp;
     int i;
+    
+    switch (type) {
+    case MX_SKIPLIST_MAX_TYPE:
+        cmp = mx_skiplist_max_comp;
+        break;
+    case MX_SKIPLIST_MIN_TYPE:
+        cmp = mx_skiplist_min_comp;
+        break;
+    default:
+        return NULL;
+    }
 
     list = zmalloc(sizeof(*list));
     if (!list) {
@@ -291,6 +307,7 @@ mx_skiplist_t *mx_skiplist_create()
         list->root->forward[i] = list->root; /* point to root */
     }
 
+    list->cmp = cmp;
     list->level = 0;
     list->size = 0;
 
@@ -305,8 +322,8 @@ void mx_skiplist_destroy(mx_skiplist_t *list, mx_skiplist_destroy_handler_t dest
     void *value;
 
     while (!mx_skiplist_empty(list)) {
-        mx_skiplist_find_min(list, (void **)&value);
-        mx_skiplist_delete_min(list);
+        mx_skiplist_find_top(list, (void **)&value);
+        mx_skiplist_delete_top(list);
         if (destroy_callback) {
             destroy_callback(value);
         }
