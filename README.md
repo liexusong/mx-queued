@@ -37,6 +37,14 @@ queue_name: 队列的名称
 </code></pre>
 queue_name: 队列的名称<br />
 
+
+* 删除一个队列
+<pre><code>
+  <b>remove</b> &lt;queue_name&gt;\r\n
+</code></pre>
+queue_name: 队列的名称<br />
+
+
 * 把回收站的指定ID的job放置到队列中
 <pre><code>
   <b>recycle</b> &lt;recycle_id&gt; &lt;priority_value&gt; &lt;delay_time&gt;\r\n

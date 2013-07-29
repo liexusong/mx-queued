@@ -35,17 +35,19 @@
 #undef zfree
 #endif
 
-#define zmalloc(s) malloc(s)
-#define zfree(p) free(p)
+#define zmalloc(s)  malloc(s)
+#define zfree(p)    free(p)
 
 #define MAXLEVEL 32
 
 
-static inline int mx_skiplist_max_comp(int a, int b) {
+static inline int
+mx_skiplist_max_comp(int a, int b) {
     return a > b;
 }
 
-static inline int mx_skiplist_min_comp(int a, int b) {
+static inline int
+mx_skiplist_min_comp(int a, int b) {
     return a < b;
 }
 
@@ -127,7 +129,7 @@ void mx_skiplist_delete_top(mx_skiplist_t *list)
     }
 
     while ((list->level > 0) &&
-           (list->root->forward[list->level] == list->root))
+        (list->root->forward[list->level] == list->root))
     {
         list->level--;
     }
@@ -244,7 +246,7 @@ int mx_skiplist_get_iterator(mx_skiplist_t *list,
 /**
  * Get skiplist level
  */
-int mx_skiplist_level(mx_skiplist_t *list)
+inline int mx_skiplist_level(mx_skiplist_t *list)
 {
     if (NULL != list)
         return list->level;
@@ -254,7 +256,7 @@ int mx_skiplist_level(mx_skiplist_t *list)
 /**
  * Get skiplist elements count
  */
-int mx_skiplist_size(mx_skiplist_t *list)
+inline int mx_skiplist_size(mx_skiplist_t *list)
 {
     if (NULL != list)
         return list->size;
@@ -264,9 +266,9 @@ int mx_skiplist_size(mx_skiplist_t *list)
 /**
  * Return the skiplist is empty
  */
-int mx_skiplist_empty(mx_skiplist_t *list)
+inline int mx_skiplist_empty(mx_skiplist_t *list)
 {
-    if (list && list->size <= 0)
+    if (list != NULL && list->size <= 0)
         return 1;
     return 0;
 }
@@ -317,7 +319,8 @@ mx_skiplist_t *mx_skiplist_create(int type)
 /*
  * skiplist destroy function
  */
-void mx_skiplist_destroy(mx_skiplist_t *list, mx_skiplist_destroy_handler_t destroy_callback)
+void mx_skiplist_destroy(mx_skiplist_t *list,
+       mx_skiplist_destroy_handler_t destroy_callback)
 {
     void *value;
 
@@ -328,6 +331,7 @@ void mx_skiplist_destroy(mx_skiplist_t *list, mx_skiplist_destroy_handler_t dest
             destroy_callback(value);
         }
     }
+
     zfree(list);
 }
 

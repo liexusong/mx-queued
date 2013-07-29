@@ -54,6 +54,7 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_dequeue_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_touch_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens);
+void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens);
 
 mx_command_t mx_commands[] = {
@@ -62,6 +63,7 @@ mx_command_t mx_commands[] = {
     {"dequeue", sizeof("dequeue")-1, mx_command_dequeue_handler, 1},
     {"touch",   sizeof("touch")-1,   mx_command_touch_handler,   1},
     {"recycle", sizeof("recycle")-1, mx_command_recycle_handler, 3},
+    {"remove",  sizeof("remove")-1,  mx_command_remove_handler,  1},
     {"size",    sizeof("size")-1,    mx_command_size_handler,    1},
     {NULL, 0, NULL},
 };
@@ -1043,14 +1045,10 @@ const struct option long_options[] = {
     {NULL,              0, NULL, 0  }
 };
 
-int main(int argc, char *argv[])
+
+void mx_parse_options(int argc, char *argv[])
 {
     int c;
-    struct rlimit rlim;
-    struct rlimit rlim_new;
-    struct sigaction sact;
-
-    mx_default_init();
 
     while ((c = getopt_long(argc, argv, "", long_options, NULL)) != -1) {
         switch (c) {
@@ -1120,6 +1118,17 @@ int main(int argc, char *argv[])
             exit(-1);
         }
     }
+}
+
+
+int main(int argc, char *argv[])
+{
+    struct rlimit rlim;
+    struct rlimit rlim_new;
+    struct sigaction sact;
+
+    mx_default_init();
+    mx_parse_options(argc, argv);
     
     if (getrlimit(RLIMIT_CORE, &rlim)==0) {
         rlim_new.rlim_cur = rlim_new.rlim_max = RLIM_INFINITY;
@@ -1454,6 +1463,24 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
     } else {
         mx_send_reply(c, "-ERR failed to recycle this job");
     }
+
+    return;
+}
+
+
+void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens)
+{
+    mx_queue_t *queue;
+    int ret;
+
+    ret = hash_remove(mx_global->queue_table, tokens[1].value, (void **)&queue);
+    if (ret == -1) {
+        mx_send_reply(c, "-ERR not found the queue");
+        return;
+    }
+
+    mx_queue_free(queue);
+    mx_send_reply(c, "+OK");
 
     return;
 }
