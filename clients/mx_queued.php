@@ -13,6 +13,9 @@ class mx_queued
         }
     }
     
+    /*
+     * push a job into queue
+     */
     public function enqueue($name, $prival, $delay, $job)
     {
         $len = strlen($job);
@@ -28,6 +31,9 @@ class mx_queued
         }
     }
     
+    /*
+     * get a job from queue and delete it
+     */
     public function dequeue($name)
     {
         fwrite($this->conn, "dequeue $name\r\n");
@@ -48,6 +54,9 @@ class mx_queued
         return $job;
     }
     
+    /*
+     * get a job from queue and push it into recycle queue
+     */
     public function touch($name)
     {
         fwrite($this->conn, "touch $name\r\n");
@@ -69,6 +78,9 @@ class mx_queued
         return array('id' => $recycle_id, 'job' => $job);
     }
     
+    /*
+     * recycle a job
+     */
     public function recycle($id, $prival, $delay)
     {
         fwrite($this->conn, "recycle $id $prival $delay\r\n");
@@ -82,6 +94,25 @@ class mx_queued
         }
     }
     
+    /*
+     * remove a queue
+     */
+    public function remove($name)
+    {
+        fwrite($this->conn, "remove $name\r\n");
+
+        $response = fgets($this->conn);
+        if (substr($response, 0, 1) == '+') {
+            return true;
+        } else {
+            $this->emsg = substr($response, 5);
+            return false;
+        }
+    }
+    
+    /*
+     * how many jobs was queue has?
+     */
     public function size($name)
     {
         fwrite($this->conn, "size $name\r\n");
@@ -108,6 +139,9 @@ class mx_queued
         }
     }
     
+    /*
+     * get the last error message
+     */
     public function error_message()
     {
         return $this->emsg;

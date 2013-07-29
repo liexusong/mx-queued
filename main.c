@@ -1025,7 +1025,7 @@ void mx_usage(void)
 
 void mx_version(void)
 {
-    printf("mx-queued version: V%s\n", MX_VERSION);
+    printf("\n mx-queued version: V%s\n", MX_VERSION);
     return;
 }
 
