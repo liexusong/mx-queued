@@ -14,6 +14,23 @@ class mx_queued
     }
     
     /*
+     * login server
+     */
+    public function auth($user, $pass)
+    {
+        fwrite($this->conn, "auth $user $pass\r\n");
+
+        $response = fgets($this->conn);
+        if (substr($response, 0, 1) == '+') {
+            $response = explode(' ', $response);
+            return $response[1];
+        } else {
+            $this->emsg = substr($response, 5);
+            return false;
+        }
+    }
+    
+    /*
      * push a job into queue
      */
     public function enqueue($name, $prival, $delay, $job)
