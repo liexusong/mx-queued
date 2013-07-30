@@ -11,7 +11,7 @@
 #define  LF_CHR  '\n'
 #define  CRLF    "\r\n"
 
-#define MX_VERSION       "0.5"
+#define MX_VERSION       "0.6"
 #define MX_DEFAULT_PORT  21012
 #define MX_RECVBUF_SIZE  2048
 #define MX_SENDBUF_SIZE  2048
