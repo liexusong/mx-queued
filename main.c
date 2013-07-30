@@ -787,6 +787,7 @@ int mx_create_auth_table()
 {
     FILE *fp;
     char vbuf[256], *user, *pass, *curr;
+    int vaild;
 
     fp = fopen(mx_global->auth_file, "r");
     if (!fp) {
@@ -797,15 +798,23 @@ int mx_create_auth_table()
 
         user = mx_str_trim(vbuf);
         curr = user;
+        vaild = 0;
 
+        /* skip empty line and comment line */
         if (!curr[0] || curr[0] == '#') continue;
 
         while (*curr) {
             if (*curr == ' ' || *curr == '\t') {
                 *curr = '\0';
+                vaild = 1;
                 break;
             }
             curr++;
+        }
+
+        if (!vaild) {
+            fclose(fp);
+            return -1;
         }
 
         pass = curr + 1;
@@ -817,7 +826,9 @@ int mx_create_auth_table()
             }
         }
 
-        if (hash_insert(mx_global->auth_table, user, strdup(pass)) == -1) {
+        if (hash_insert(mx_global->auth_table, 
+                            user, strdup(pass)) == -1)
+        {
             fclose(fp);
             return -1;
         }
