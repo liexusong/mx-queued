@@ -5,6 +5,7 @@
 #include "list.h"
 #include "skiplist.h"
 #include "hash.h"
+#include "utils.h"
 
 #define  CR_CHR  '\r'
 #define  LF_CHR  '\n'
@@ -76,6 +77,11 @@ struct mx_global_s {
     int last_recycle_id;
     int recycle_timeout;
 
+    /* authentication */
+    HashTable *auth_table;
+    int auth_enable;
+    char *auth_file;
+
     FILE *log;
     char *log_path;
     int log_level;
@@ -104,6 +110,7 @@ struct mx_connection_s {
     unsigned int revent_set:1;
     unsigned int wevent_set:1;
     unsigned int recycle:1;
+    unsigned int reliable:1;
     unsigned int flags:4;
     mx_connection_t *next;
 };

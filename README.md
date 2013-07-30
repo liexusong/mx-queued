@@ -5,6 +5,14 @@ Fast and simple message queue server
 -------------------------------------------------
 
 使用协议:<br />
+* 登录服务器
+<pre><code>
+  <b>auth</b> &lt;user&gt; &lt;pass&gt;\r\n
+</code></pre>
+user: 用户名<br />
+pass: 密码<br />
+
+
 * 添加一个job到队列中:
 <pre><code>
   <b>enqueue</b> &lt;queue_name&gt; &lt;priority_value&gt; &lt;delay_time&gt; &lt;job_size&gt;\r\n
@@ -21,14 +29,14 @@ job_body: job的数据体<br />
 <pre><code>
   <b>dequeue</b> &lt;queue_name&gt;\r\n
 </code></pre>
-queue_name: 队列的名称
+queue_name: 队列的名称<br />
 
 
 * 获取队列的长度
 <pre><code>
   <b>size</b> &lt;queue_name&gt;\r\n
 </code></pre>
-queue_name: 队列的名称
+queue_name: 队列的名称<br />
 
 
 * 获取一个job, 并且把这个job暂时放置到回收站
@@ -73,6 +81,7 @@ $ make
 --recycle-timeout &lt;seconds&gt;   回收站的周期
 --log-path &lt;path&gt;             日志保存的路径
 --log-level &lt;level&gt;           日志等级, 可以选择(error|notice|debug)这几个
+--auth-file &lt;path&gt;            开启认证功能并指定认证文件
 --version                     打印服务器的版本
 --help                        打印使用指南
 </code></pre>

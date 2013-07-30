@@ -50,6 +50,7 @@
 
 
 void mx_command_ping_handler(mx_connection_t *c, mx_token_t *tokens);
+void mx_command_auth_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_dequeue_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_touch_handler(mx_connection_t *c, mx_token_t *tokens);
@@ -59,6 +60,7 @@ void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens);
 
 mx_command_t mx_commands[] = {
     {"ping",    sizeof("ping")-1,    mx_command_ping_handler,    0},
+    {"auth",    sizeof("auth")-1,    mx_command_auth_handler,    2},
     {"enqueue", sizeof("enqueue")-1, mx_command_enqueue_handler, 4},
     {"dequeue", sizeof("dequeue")-1, mx_command_dequeue_handler, 1},
     {"touch",   sizeof("touch")-1,   mx_command_touch_handler,   1},
@@ -119,68 +121,6 @@ void mx_write_log(mx_log_level level, const char *fmt, ...)
     va_end(ap);
 
     return;
-}
-
-
-int mx_set_nonblocking(int fd)
-{
-    int flags;
-    
-    if ((flags = fcntl(fd, F_GETFL, 0)) < 0 ||
-         fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        return -1;
-    return 0;
-}
-
-
-void mx_daemonize(void)
-{
-    int fd;
-
-    if (fork() != 0) exit(0);
-
-    setsid();
-
-    if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
-        dup2(fd, STDIN_FILENO);
-        dup2(fd, STDOUT_FILENO);
-        dup2(fd, STDERR_FILENO);
-        if (fd > STDERR_FILENO) close(fd);
-    }
-}
-
-
-int mx_atoi(const char *str, int *retval)
-{
-    const char *ptr = str;
-    char ch;
-    int absolute = 1;
-    int result;
-
-    ch = *ptr;
-
-    if (ch == '-') {
-        absolute = -1;
-        ++ptr;
-    } else if (ch == '+') {
-        absolute = 1;
-        ++ptr;
-    }
-
-    for (result = 0; *ptr != '\0'; ptr++) {
-        ch = *ptr;
-        if (ch >= '0' && ch <= '9') {
-            result = result * 10 + (ch - '0');
-        } else {
-            return -1;
-        }
-    }
-    
-    if (retval) {
-        *retval = absolute * result;
-    }
-
-    return 0;
 }
 
 
@@ -328,6 +268,13 @@ do_again:
 
     /* separation parameter */
     tcount = mx_tokenize_command(begin, tokens, MX_MAX_TOKENS);
+
+    if (mx_global->auth_enable && !c->reliable) {
+        if (strcmp(tokens[0].value, "auth")) {
+            mx_send_reply(c, "-ERR unreliable connection");
+            return;
+        }
+    }
 
     cmd = mx_command_find(tokens[0].value);
     if (NULL == cmd) {
@@ -674,6 +621,8 @@ mx_connection_t *mx_connection_create(int sock)
     c->revent_set = 0;
     c->wevent_set = 0;
 
+    c->reliable = 0;
+
     c->recycle = 0;
     c->recycle_id = 0;
 
@@ -732,13 +681,14 @@ void mx_debug_connection(mx_connection_t *c)
        "    revent_handler: %p\n"
        "    wevent_handler: %p\n"
        "    revent_set: %u\n"
-       "    wevent_set: %u\n\n",
+       "    wevent_set: %u\n\n"
+       "    reliable: %u\n\n",
        c->sock, c->state,
        c->recvbuf, (c->recvlast - c->recvpos),
        c->sendbuf, (c->sendlast - c->sendpos),
        c->job, c->job_body_cptr, c->job_body_read, c->job_body_send,
        c->phase, c->revent_handler, c->wevent_handler,
-       c->revent_set, c->wevent_set);
+       c->revent_set, c->wevent_set, c->reliable);
 
        return;
 }
@@ -833,6 +783,51 @@ int mx_core_timer(aeEventLoop *eventLoop, long long id, void *data)
 }
 
 
+int mx_create_auth_table()
+{
+    FILE *fp;
+    char vbuf[256], *user, *pass, *curr;
+
+    fp = fopen(mx_global->auth_file, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    while (fgets(vbuf, 256, fp) != NULL) {
+
+        user = mx_str_trim(vbuf);
+        curr = user;
+
+        if (!curr[0] || curr[0] == '#') continue;
+
+        while (*curr) {
+            if (*curr == ' ' || *curr == '\t') {
+                *curr = '\0';
+                break;
+            }
+            curr++;
+        }
+
+        pass = curr + 1;
+        while (*pass) {
+            if (*pass == ' ' || *pass == '\t') {
+                pass++;
+            } else {
+                break;
+            }
+        }
+
+        if (hash_insert(mx_global->auth_table, user, strdup(pass)) == -1) {
+            fclose(fp);
+            return -1;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+
 int mx_server_startup()
 {
     struct linger ling = {0, 0};
@@ -902,6 +897,14 @@ int mx_server_startup()
         mx_write_log(mx_log_error, "failed to create recycle queue");
         goto failed;
     }
+    
+    if (mx_global->auth_enable) {
+        mx_global->auth_table = hash_alloc(16);
+        if (!mx_global->auth_table || mx_create_auth_table() == -1) {
+            mx_write_log(mx_log_error, "failed to create command's table");
+            goto failed;
+        }
+    }
 
     mx_global->event = aeCreateEventLoop();
     if (NULL == mx_global->event) {
@@ -947,6 +950,10 @@ failed:
         mx_skiplist_destroy(mx_global->recycle_queue, NULL);
     }
 
+    if (mx_global->auth_table) {
+        hash_destroy(mx_global->auth_table, free);
+    }
+
     if (mx_global->event) {
         aeDeleteEventLoop(mx_global->event);
     }
@@ -968,6 +975,10 @@ void mx_server_shutdown()
     mx_skiplist_destroy(mx_global->delay_queue, mx_job_free);
 
     mx_skiplist_destroy(mx_global->recycle_queue, mx_job_free);
+
+    if (mx_global->auth_table) {
+        hash_destroy(mx_global->auth_table, free);
+    }
 
     aeDeleteEventLoop(mx_global->event);
 
@@ -997,6 +1008,10 @@ void mx_default_init()
     mx_global->last_recycle_id = 1;
     mx_global->recycle_timeout = MX_RECYCLE_TIMEOUT;
 
+    mx_global->auth_table = NULL;
+    mx_global->auth_enable = 0;
+    mx_global->auth_file = NULL;
+
     mx_global->log = NULL;
     mx_global->log_path = MX_DEFAULT_LOG_PATH;
     mx_global->log_level = mx_log_error;
@@ -1017,6 +1032,7 @@ void mx_usage(void)
     printf("    --recycle-timeout <seconds>   how long the recycle job life.\n");
     printf("    --log-path <path>             log save path.\n");
     printf("    --log-level <level>           log level (error|notice|debug).\n");
+    printf("    --auth-file <path>            enable auth feature and set auth file path.\n");
     printf("    --version                     print this current version and exit.\n");
     printf("    --help                        print this help and exit.\n");
     return;
@@ -1042,6 +1058,7 @@ const struct option long_options[] = {
     {"recycle-timeout", 1, NULL, 'r'},
     {"log-path",        1, NULL, 'l'},
     {"log-level",       1, NULL, 'L'},
+    {"auth-file",       1, NULL, 'a'},
     {NULL,              0, NULL, 0  }
 };
 
@@ -1111,6 +1128,14 @@ void mx_parse_options(int argc, char *argv[])
                 mx_global->log_level = mx_log_debug;
             } else {
                 fprintf(stderr, "[error] undefined `%s' log level.\n", optarg);
+                exit(-1);
+            }
+            break;
+        case 'a':
+            mx_global->auth_enable = 1;
+            mx_global->auth_file = strdup(optarg);
+            if (!mx_global->auth_file) {
+                fprintf(stderr, "[error] can not duplicate auth file path.\n");
                 exit(-1);
             }
             break;
@@ -1292,6 +1317,23 @@ void mx_send_job(mx_connection_t *c, mx_job_t *job)
 void mx_command_ping_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     mx_send_reply(c, "+OK");
+}
+
+
+void mx_command_auth_handler(mx_connection_t *c, mx_token_t *tokens)
+{
+    char *pass;
+    int ret;
+    
+    ret = hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass);
+    if (ret == -1 || strcmp(tokens[2].value, pass)) {
+        mx_send_reply(c, "-ERR access denied");
+        return;
+    }
+
+    c->reliable = 1;
+    mx_send_reply(c, "+OK");
+    return;
 }
 
 
