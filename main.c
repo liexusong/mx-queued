@@ -571,6 +571,7 @@ void mx_send_reply(mx_connection_t *c, mx_reply_type type, char *str)
 
     slen = strlen(str);
 
+    /* output string too big */
     if (slen + rlen + 2 > (c->sendend - c->sendlast)) {
         return;
     }
@@ -1359,6 +1360,17 @@ void mx_send_job(mx_connection_t *c, mx_job_t *job)
 
 /* command's handlers */
 
+#define mx_failed_and_reply(execute, response)   \
+    do {                                         \
+        int ret;                                 \
+        ret = execute;                           \
+        if (ret == 1) {                          \
+            mx_send_fail_reply(c, response);     \
+            return;                              \
+        }                                        \
+    } while(0)
+
+
 void mx_command_ping_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     mx_send_ok_reply(c, "pong");
@@ -1368,13 +1380,12 @@ void mx_command_ping_handler(mx_connection_t *c, mx_token_t *tokens)
 void mx_command_auth_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     char *pass;
-    int ret;
-    
-    ret = hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass);
-    if (ret == -1 || strcmp(tokens[2].value, pass)) {
-        mx_send_fail_reply(c, "access denied");
-        return;
-    }
+
+    mx_failed_and_reply(
+        (hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass) == -1 ||
+         strcmp(tokens[2].value, pass)),
+        "access denied"
+    );
 
     c->reliable = 1;
     mx_send_ok_reply(c, "effective");
@@ -1390,31 +1401,27 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     int remain;
     int ret;
 
-    ret = mx_atoi(tokens[2].value, &prival);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "priority value invalid");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[2].value, &prival) == -1,
+        "priority value invalid"
+    );
 
-    ret = mx_atoi(tokens[3].value, &delay);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "delay time invalid");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[3].value, &delay) == -1,
+        "delay time invalid"
+    );
 
-    ret = mx_atoi(tokens[4].value, &size);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "job size invalid");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[4].value, &size) == -1,
+        "job size invalid"
+    );
 
     ret = hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue);
     if (ret == -1) {
-        queue = mx_queue_create(tokens[1].value, tokens[1].length);
-        if (NULL == queue) {
-            mx_send_fail_reply(c, "not enough memory");
-            return;
-        }
+        mx_failed_and_reply(
+            (queue = mx_queue_create(tokens[1].value, tokens[1].length)) == NULL,
+            "not enough memory"
+        );
 
         ret = hash_insert(mx_global->queue_table, tokens[1].value, queue);
         if (ret == -1) {
@@ -1424,16 +1431,15 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
         }
     }
 
-    job = mx_job_create(queue, prival, delay, size);
-    if (NULL == job) {
-        mx_send_fail_reply(c, "not enough memory");
-        return;
-    }
+    mx_failed_and_reply(
+        (job = mx_job_create(queue, prival, delay, size)) == NULL,
+        "not enough memory"
+    );
 
     c->job = job;
     c->job_body_cptr = job->body;       /* start read job body position */
     c->job_body_read = job->length + 2; /* include CRLF */
-    
+
     remain = c->recvlast - c->recvpos;
 
     if (remain > 0) {
@@ -1464,19 +1470,16 @@ void mx_dequeue_comm_handler(mx_connection_t *c, char *name, int touch)
 {
     mx_queue_t *queue;
     mx_job_t *job;
-    int ret;
 
-    ret = hash_lookup(mx_global->queue_table, name, (void **)&queue);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "not found the queue");
-        return;
-    }
+    mx_failed_and_reply(
+        hash_lookup(mx_global->queue_table, name, (void **)&queue) == -1,
+        "not found the queue"
+    );
 
-    ret = mx_skiplist_find_top(queue->list, (void **)&job);
-    if (ret == SKL_STATUS_KEY_NOT_FOUND) {
-        mx_send_fail_reply(c, "the queue was empty");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_skiplist_find_top(queue->list, (void **)&job) == SKL_STATUS_KEY_NOT_FOUND,
+        "the queue was empty"
+    );
 
     if (touch) {
         c->recycle = 1;
@@ -1511,30 +1514,26 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
     mx_job_t *job;
     int ret;
 
-    ret = mx_atoi(tokens[1].value, &recycle_id);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "recycle id invaild");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[1].value, &recycle_id) == -1,
+        "recycle id invaild"
+    );
 
-    ret = mx_atoi(tokens[2].value, &prival);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "priority value invaild");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[2].value, &prival) == -1,
+        "priority value invaild"
+    );
 
-    ret = mx_atoi(tokens[3].value, &delay);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "delay time invaild");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_atoi(tokens[3].value, &delay) == -1,
+        "delay time invaild"
+    );
 
-    ret = mx_skiplist_delete_key(mx_global->recycle_queue,
-                                     recycle_id, (void **)&job);
-    if (ret == SKL_STATUS_KEY_NOT_FOUND) {
-        mx_send_fail_reply(c, "not found the recycle job");
-        return;
-    }
+    mx_failed_and_reply(
+        mx_skiplist_delete_key(mx_global->recycle_queue,
+              recycle_id, (void **)&job) == SKL_STATUS_KEY_NOT_FOUND,
+        "not found the recycle job"
+    );
 
     job->prival = prival;
     if (delay > 0) {
@@ -1558,13 +1557,11 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
 void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     mx_queue_t *queue;
-    int ret;
 
-    ret = hash_remove(mx_global->queue_table, tokens[1].value, (void **)&queue);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "not found the queue");
-        return;
-    }
+    mx_failed_and_reply(
+        hash_remove(mx_global->queue_table, tokens[1].value, (void **)&queue) == -1,
+        "not found the queue"
+    );
 
     mx_queue_free(queue);
     mx_send_ok_reply(c, "removed");
@@ -1577,13 +1574,11 @@ void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     mx_queue_t *queue;
     char sndbuf[32];
-    int ret;
 
-    ret = hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue);
-    if (ret == -1) {
-        mx_send_fail_reply(c, "not found the queue");
-        return;
-    }
+    mx_failed_and_reply(
+        hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue) == -1,
+        "not found the queue"
+    );
 
     sprintf(sndbuf, "%d", mx_skiplist_size(queue->list));
     mx_send_ok_reply(c, sndbuf);
