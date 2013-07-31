@@ -55,6 +55,12 @@ typedef enum {
 } mx_log_level;
 
 
+typedef enum {
+    mx_reply_ok,
+    mx_reply_fail
+} mx_reply_type;
+
+
 struct mx_global_s {
     int sock;
     int daemon_mode;

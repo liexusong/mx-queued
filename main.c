@@ -74,7 +74,8 @@ mx_command_t mx_commands[] = {
 mx_connection_t *mx_connection_create(int sock);
 void mx_connection_free(mx_connection_t *c);
 void mx_debug_connection(mx_connection_t *c);
-void mx_send_reply(mx_connection_t *c, char *str);
+void mx_send_ok_reply(mx_connection_t *c, char *str);
+void mx_send_fail_reply(mx_connection_t *c, char *str);
 mx_queue_t *mx_queue_create(char *name, int name_len);
 void mx_queue_free(void *arg);
 mx_job_t *mx_job_create(mx_queue_t *belong, int prival, int delay, int length);
@@ -271,19 +272,19 @@ do_again:
 
     if (mx_global->auth_enable && !c->reliable) {
         if (strcmp(tokens[0].value, "auth")) {
-            mx_send_reply(c, "-ERR unreliable connection");
+            mx_send_fail_reply(c, "unreliable connection");
             return;
         }
     }
 
     cmd = mx_command_find(tokens[0].value);
     if (NULL == cmd) {
-        mx_send_reply(c, "-ERR not found command");
+        mx_send_fail_reply(c, "not found command");
         return;
     }
 
     if (cmd->argc != tcount - 1) { /* except command */
-        mx_send_reply(c, "-ERR parameter amount invalid");
+        mx_send_fail_reply(c, "parameter amount invalid");
         return;
     }
 
@@ -352,7 +353,7 @@ void mx_read_body_finish(mx_connection_t *c)
         c->job_body_cptr = NULL;
         c->job_body_read = 0;
 
-        mx_send_reply(c, "-ERR job invaild");
+        mx_send_fail_reply(c, "job invaild");
         return;
     }
 
@@ -400,7 +401,7 @@ void mx_read_body_handler(mx_connection_t *c)
 
     if (c->job_body_read <= 0) {
         mx_read_body_finish(c);
-        mx_send_reply(c, "+OK");
+        mx_send_ok_reply(c, "enqueue");
     }
 
     return;
@@ -550,18 +551,39 @@ send_body_flag:
 }
 
 
-void mx_send_reply(mx_connection_t *c, char *str)
+void mx_send_reply(mx_connection_t *c, mx_reply_type type, char *str)
 {
-    int len, ret;
+    char *response_state;
+    int slen, rlen, ret;
 
-    len = strlen(str);
-    if (len + 2 > (c->sendend - c->sendlast)) {
-        str = "-ERR output string too long";
-        len = strlen(str);
+    switch (type) {
+    case mx_reply_ok:
+        response_state = "+OK ";
+        rlen = 4;
+        break;
+    case mx_reply_fail:
+        response_state = "-ERR ";
+        rlen = 5;
+        break;
+    default:
+        return;
     }
 
-    memcpy(c->sendlast, str, len);
-    c->sendlast += len;
+    slen = strlen(str);
+
+    if (slen + rlen + 2 > (c->sendend - c->sendlast)) {
+        return;
+    }
+
+    /* response state */
+    memcpy(c->sendlast, response_state, rlen);
+    c->sendlast += rlen;
+
+    /* response message */
+    memcpy(c->sendlast, str, slen);
+    c->sendlast += slen;
+
+    /* inlcude CRLF */
     memcpy(c->sendlast, CRLF, 2);
     c->sendlast += 2;
 
@@ -577,6 +599,18 @@ void mx_send_reply(mx_connection_t *c, char *str)
     }
 
     return;
+}
+
+
+void mx_send_ok_reply(mx_connection_t *c, char *str)
+{
+    mx_send_reply(c, mx_reply_ok, str);
+}
+
+
+void mx_send_fail_reply(mx_connection_t *c, char *str)
+{
+    mx_send_reply(c, mx_reply_fail, str);
 }
 
 
@@ -1296,9 +1330,9 @@ void mx_send_job(mx_connection_t *c, mx_job_t *job)
     int len, ret;
 
     if (c->recycle) { /* the job need be recycle? send recycle id for connection */
-        len = sprintf(buf, "+OK %d %d\r\n", c->recycle_id, job->length);
+        len = sprintf(buf, "+OK %d %d" CRLF, c->recycle_id, job->length);
     } else {
-        len = sprintf(buf, "+OK %d\r\n", job->length);
+        len = sprintf(buf, "+OK %d" CRLF, job->length);
     }
 
     memcpy(c->sendlast, buf, len);
@@ -1327,7 +1361,7 @@ void mx_send_job(mx_connection_t *c, mx_job_t *job)
 
 void mx_command_ping_handler(mx_connection_t *c, mx_token_t *tokens)
 {
-    mx_send_reply(c, "+OK");
+    mx_send_ok_reply(c, "pong");
 }
 
 
@@ -1338,12 +1372,12 @@ void mx_command_auth_handler(mx_connection_t *c, mx_token_t *tokens)
     
     ret = hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass);
     if (ret == -1 || strcmp(tokens[2].value, pass)) {
-        mx_send_reply(c, "-ERR access denied");
+        mx_send_fail_reply(c, "access denied");
         return;
     }
 
     c->reliable = 1;
-    mx_send_reply(c, "+OK");
+    mx_send_ok_reply(c, "effective");
     return;
 }
 
@@ -1358,19 +1392,19 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
 
     ret = mx_atoi(tokens[2].value, &prival);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR priority value invalid");
+        mx_send_fail_reply(c, "priority value invalid");
         return;
     }
 
     ret = mx_atoi(tokens[3].value, &delay);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR delay time invalid");
+        mx_send_fail_reply(c, "delay time invalid");
         return;
     }
 
     ret = mx_atoi(tokens[4].value, &size);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR job size invalid");
+        mx_send_fail_reply(c, "job size invalid");
         return;
     }
 
@@ -1378,21 +1412,21 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     if (ret == -1) {
         queue = mx_queue_create(tokens[1].value, tokens[1].length);
         if (NULL == queue) {
-            mx_send_reply(c, "-ERR not enough memory");
+            mx_send_fail_reply(c, "not enough memory");
             return;
         }
 
         ret = hash_insert(mx_global->queue_table, tokens[1].value, queue);
         if (ret == -1) {
             mx_queue_free(queue);
-            mx_send_reply(c, "-ERR not enough memory");
+            mx_send_fail_reply(c, "not enough memory");
             return;
         }
     }
 
     job = mx_job_create(queue, prival, delay, size);
     if (NULL == job) {
-        mx_send_reply(c, "-ERR not enough memory");
+        mx_send_fail_reply(c, "not enough memory");
         return;
     }
 
@@ -1410,12 +1444,12 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
         c->job_body_cptr += tocpy;
         c->job_body_read -= tocpy;
 
-        c->recvpos += tocpy;   /* fix receive position */
+        c->recvpos += tocpy; /* fix receive position */
 
         if (c->job_body_read <= 0) /* finish read job body */
         {
             mx_read_body_finish(c);
-            mx_send_reply(c, "+OK");
+            mx_send_ok_reply(c, "enqueue");
             return;
         }
     }
@@ -1434,13 +1468,13 @@ void mx_dequeue_comm_handler(mx_connection_t *c, char *name, int touch)
 
     ret = hash_lookup(mx_global->queue_table, name, (void **)&queue);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR not found the queue");
+        mx_send_fail_reply(c, "not found the queue");
         return;
     }
 
     ret = mx_skiplist_find_top(queue->list, (void **)&job);
     if (ret == SKL_STATUS_KEY_NOT_FOUND) {
-        mx_send_reply(c, "-ERR the queue was empty");
+        mx_send_fail_reply(c, "the queue was empty");
         return;
     }
 
@@ -1479,26 +1513,26 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
 
     ret = mx_atoi(tokens[1].value, &recycle_id);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR recycle id invaild");
+        mx_send_fail_reply(c, "recycle id invaild");
         return;
     }
 
     ret = mx_atoi(tokens[2].value, &prival);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR priority value invaild");
+        mx_send_fail_reply(c, "priority value invaild");
         return;
     }
 
     ret = mx_atoi(tokens[3].value, &delay);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR delay time invaild");
+        mx_send_fail_reply(c, "delay time invaild");
         return;
     }
 
     ret = mx_skiplist_delete_key(mx_global->recycle_queue,
                                      recycle_id, (void **)&job);
     if (ret == SKL_STATUS_KEY_NOT_FOUND) {
-        mx_send_reply(c, "-ERR not found this recycle job");
+        mx_send_fail_reply(c, "not found the recycle job");
         return;
     }
 
@@ -1512,9 +1546,9 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
     }
 
     if (ret == SKL_STATUS_OK) {
-        mx_send_reply(c, "+OK");
+        mx_send_ok_reply(c, "recycled");
     } else {
-        mx_send_reply(c, "-ERR failed to recycle this job");
+        mx_send_fail_reply(c, "failed to recycle the job");
     }
 
     return;
@@ -1528,12 +1562,12 @@ void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens)
 
     ret = hash_remove(mx_global->queue_table, tokens[1].value, (void **)&queue);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR not found the queue");
+        mx_send_fail_reply(c, "not found the queue");
         return;
     }
 
     mx_queue_free(queue);
-    mx_send_reply(c, "+OK");
+    mx_send_ok_reply(c, "removed");
 
     return;
 }
@@ -1542,17 +1576,17 @@ void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens)
 void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens)
 {
     mx_queue_t *queue;
-    char sndbuf[256];
+    char sndbuf[32];
     int ret;
 
     ret = hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue);
     if (ret == -1) {
-        mx_send_reply(c, "-ERR not found the queue");
+        mx_send_fail_reply(c, "not found the queue");
         return;
     }
 
-    sprintf(sndbuf, "+OK %d", mx_skiplist_size(queue->list));
-    mx_send_reply(c, sndbuf);
+    sprintf(sndbuf, "%d", mx_skiplist_size(queue->list));
+    mx_send_ok_reply(c, sndbuf);
 
     return;
 }
