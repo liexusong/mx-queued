@@ -1399,7 +1399,6 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     mx_queue_t *queue;
     mx_job_t *job;
     int remain;
-    int ret;
 
     mx_failed_and_reply(
         mx_atoi(tokens[2].value, &prival) == -1,
@@ -1416,15 +1415,14 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
         "job size invalid"
     );
 
-    ret = hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue);
-    if (ret == -1) {
+    if (hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue) == -1) {
+
         mx_failed_and_reply(
             (queue = mx_queue_create(tokens[1].value, tokens[1].length)) == NULL,
             "not enough memory"
         );
 
-        ret = hash_insert(mx_global->queue_table, tokens[1].value, queue);
-        if (ret == -1) {
+        if (hash_insert(mx_global->queue_table, tokens[1].value, queue) == -1) {
             mx_queue_free(queue);
             mx_send_fail_reply(c, "not enough memory");
             return;
@@ -1443,7 +1441,8 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     remain = c->recvlast - c->recvpos;
 
     if (remain > 0) {
-        int tocpy = remain > c->job_body_read ? c->job_body_read : remain;
+        int tocpy = remain > c->job_body_read ?
+                             c->job_body_read : remain;
 
         memcpy(c->job_body_cptr, c->recvpos, tocpy);
 
