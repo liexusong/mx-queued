@@ -79,6 +79,7 @@ struct mx_global_s {
     pid_t bgsave_pid;
     time_t last_bgsave_time;
     int dirty;
+    int outof_memory;
 
     int last_recycle_id;
     int recycle_timeout;
