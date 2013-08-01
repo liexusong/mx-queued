@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 - 2013, Jackson Lie <liexusong@qq.com>
+ * Copyright (c) 2012 - 2013, YukChung Lee <liexusong@qq.com>
  * All rights reserved.
  *  __   __  __   __         _______  __   __  _______  __   __  _______  ______  
  * |  |_|  ||  |_|  |       |       ||  | |  ||       ||  | |  ||       ||      | 
@@ -369,6 +369,7 @@ void mx_read_body_finish(mx_connection_t *c)
         mx_global->dirty++;
     } else {
         mx_send_fail_reply(c, "failed");
+        mx_job_free(c->job);
     }
 
     c->job = NULL;
@@ -437,7 +438,7 @@ void mx_send_response_handler(mx_connection_t *c)
 
 #if 0
         /* don't delete write event,
-         * because mx_event_process_handler function would delete it,
+         * because mx_event_process_handler() function would delete it,
          * when write event trigger */
 
         if (c->wevent_set) {
@@ -573,6 +574,7 @@ void mx_send_reply(mx_connection_t *c, mx_reply_type type, char *str)
 
     /* output string too big */
     if (slen + rlen + 2 > (c->sendend - c->sendlast)) {
+        mx_write_log(mx_log_notice, "Output string too big, socket(%d)", c->sock);
         return;
     }
 
@@ -619,6 +621,7 @@ mx_connection_t *mx_connection_create(int sock)
 {
     mx_connection_t *c;
 
+    /* get connection from free list */
     if (mx_free_connections_count > 0) {
         c = mx_free_connections;
         mx_free_connections = c->next;
@@ -1387,8 +1390,8 @@ void mx_command_auth_handler(mx_connection_t *c, mx_token_t *tokens)
     char *pass;
 
     mx_failed_and_reply(
-        (hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass) == -1 ||
-         strcmp(tokens[2].value, pass)),
+         hash_lookup(mx_global->auth_table, tokens[1].value, (void **)&pass) == -1 ||
+         strcmp(tokens[2].value, pass),
         "denied"
     );
 
@@ -1406,16 +1409,8 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     int remain;
 
     mx_failed_and_reply(
-        mx_atoi(tokens[2].value, &prival) == -1,
-        "invaild"
-    );
-
-    mx_failed_and_reply(
-        mx_atoi(tokens[3].value, &delay) == -1,
-        "invaild"
-    );
-
-    mx_failed_and_reply(
+        mx_atoi(tokens[2].value, &prival) == -1 ||
+        mx_atoi(tokens[3].value, &delay) == -1 ||
         mx_atoi(tokens[4].value, &size) == -1,
         "invaild"
     );
@@ -1475,11 +1470,7 @@ void mx_dequeue_comm_handler(mx_connection_t *c, char *name, int touch)
     mx_job_t *job;
 
     mx_failed_and_reply(
-        hash_lookup(mx_global->queue_table, name, (void **)&queue) == -1,
-        "failed"
-    );
-
-    mx_failed_and_reply(
+        hash_lookup(mx_global->queue_table, name, (void **)&queue) == -1 ||
         mx_skiplist_find_top(queue->list, (void **)&job) == SKL_STATUS_KEY_NOT_FOUND,
         "failed"
     );
@@ -1518,16 +1509,8 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
     int ret;
 
     mx_failed_and_reply(
-        mx_atoi(tokens[1].value, &recycle_id) == -1,
-        "invaild"
-    );
-
-    mx_failed_and_reply(
-        mx_atoi(tokens[2].value, &prival) == -1,
-        "invaild"
-    );
-
-    mx_failed_and_reply(
+        mx_atoi(tokens[1].value, &recycle_id) == -1 ||
+        mx_atoi(tokens[2].value, &prival) == -1 ||
         mx_atoi(tokens[3].value, &delay) == -1,
         "invaild"
     );
