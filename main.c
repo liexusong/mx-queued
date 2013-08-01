@@ -391,9 +391,8 @@ void mx_read_body_handler(mx_connection_t *c)
             mx_connection_free(c);
         }
         return;
-    }
-    else if (rbytes == 0)
-    {
+
+    } else if (rbytes == 0) {
         mx_connection_free(c);
         return;
     }
@@ -406,6 +405,44 @@ void mx_read_body_handler(mx_connection_t *c)
     }
 
     return;
+}
+
+
+#define DISCARD_BUFFER_SIZE 2048
+
+void mx_discard_body_handler(mx_connection_t *c)
+{
+    char buffer[DISCARD_BUFFER_SIZE];
+    int rbytes, toread;
+
+do_again:
+
+    if (c->job_body_read <= 0) {
+        mx_send_fail_reply(c, "failed");
+        return;
+    }
+
+    toread = DISCARD_BUFFER_SIZE > c->job_body_read ?
+                                   c->job_body_read : DISCARD_BUFFER_SIZE;
+
+    rbytes = read(c->sock, buffer, toread);
+
+    if (rbytes == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            mx_connection_free(c);
+        }
+        return;
+
+    } else if (rbytes == 0) {
+        mx_connection_free(c);
+        return;
+    }
+
+    c->job_body_read -= rbytes;
+
+    if (rbytes == toread || c->job_body_read <= 0) {
+        goto do_again;
+    }
 }
 
 
@@ -1371,7 +1408,7 @@ void mx_send_job(mx_connection_t *c, mx_job_t *job)
 #define mx_failed_and_reply(execute, response)   \
     do {                                         \
         int ret;                                 \
-        ret = execute;                           \
+        ret = (execute);                         \
         if (ret == 1) {                          \
             mx_send_fail_reply(c, response);     \
             return;                              \
@@ -1417,39 +1454,37 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
 
     if (hash_lookup(mx_global->queue_table, tokens[1].value, (void **)&queue) == -1) {
 
-        mx_failed_and_reply(
-            (queue = mx_queue_create(tokens[1].value, tokens[1].length)) == NULL,
-            "failed"
-        );
+        queue = mx_queue_create(tokens[1].value, tokens[1].length);
+        if (queue == NULL) {
+            goto discard_body;
+        }
 
         if (hash_insert(mx_global->queue_table, tokens[1].value, queue) == -1) {
             mx_queue_free(queue);
-            mx_send_fail_reply(c, "failed");
-            return;
+            goto discard_body;
         }
     }
 
-    mx_failed_and_reply(
-        (job = mx_job_create(queue, prival, delay, size)) == NULL,
-        "failed"
-    );
+    job = mx_job_create(queue, prival, delay, size);
+    if (job == NULL) {
+        goto discard_body;
+    }
 
     c->job = job;
-    c->job_body_cptr = job->body;  /* start read job body position */
-    c->job_body_read = job->length + 2; /* include CRLF */
+    c->job_body_cptr = job->body;       /* read begin position */
+    c->job_body_read = job->length + 2; /* crlf */
 
     remain = c->recvlast - c->recvpos;
 
     if (remain > 0) {
         int tocpy = remain > c->job_body_read ?
                              c->job_body_read : remain;
-
         memcpy(c->job_body_cptr, c->recvpos, tocpy);
 
         c->job_body_cptr += tocpy;
         c->job_body_read -= tocpy;
 
-        c->recvpos += tocpy; /* fix receive position */
+        c->recvpos += tocpy; /* fix position */
 
         /* finish read job body */
         if (c->job_body_read <= 0) {
@@ -1459,7 +1494,27 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     }
 
     c->revent_handler = mx_read_body_handler;
+    return;
 
+
+discard_body:
+
+    c->job_body_read  = size + 2;
+    c->revent_handler = mx_discard_body_handler;
+
+    remain = c->recvlast - c->recvpos;
+
+    if (remain > 0) {
+        int todelete = remain > c->job_body_read ?
+                                c->job_body_read : remain;
+
+        c->job_body_read -= todelete;
+        c->recvpos += todelete;
+
+        if (c->job_body_read <= 0) {
+            c->revent_handler(c);
+        }
+    }
     return;
 }
 
