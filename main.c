@@ -1534,6 +1534,7 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens)
         mx_send_ok_reply(c, "recycled");
     } else {
         mx_send_fail_reply(c, "failed");
+        mx_job_free(job);
     }
 
     return;
