@@ -32,7 +32,7 @@
 
 /* background save queues feature support */
 
-#define MX_BGSAVE_HEADER "MXQUEUED/0.5"
+#define MX_BGSAVE_HEADER "MXQUEUED/0.7"
 
 struct mx_job_header {
     int prival;
