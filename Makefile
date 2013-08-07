@@ -2,16 +2,16 @@
 # Copyright(c) YukChung Li
 
 DEBUG?= -g
-CFLAGS?= -std=c99 -pedantic -O2 -Wall -W -DSDS_ABORT_ON_OOM
+CFLAGS?= -std=c99 -pedantic -O2 -Wall -W -DSDS_ABORT_ON_OOM -llua -lm -ldl
 CCOPT= $(CFLAGS)
 
-OBJ = main.o ae.o hash.o skiplist.o db.o utils.o
+OBJ = main.o ae.o hash.o skiplist.o db.o utils.o lua.o
 PRGNAME = mx-queued
 
 all: server
 
 server: $(OBJ)
-	$(CC) -o $(PRGNAME) $(CCOPT) $(DEBUG) $(OBJ)
+	$(CC) -o $(PRGNAME) $(DEBUG) $(OBJ) $(CCOPT)
 
 main.o: main.c global.h
 	$(CC) -c main.c
@@ -30,6 +30,9 @@ hash.o: hash.c hash.h list.h
 
 db.o: db.c global.h
 	$(CC) -c db.c
+
+lua.o: lua.c global.h
+	$(CC) -c lua.c
 
 clean:
 	rm -rf $(PRGNAME) *.o

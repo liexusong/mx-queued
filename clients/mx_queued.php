@@ -13,26 +13,6 @@ class mx_queued
         }
     }
     
-    /*
-     * login server
-     */
-    public function auth($user, $pass)
-    {
-        fwrite($this->conn, "auth $user $pass\r\n");
-
-        $response = fgets($this->conn);
-        if (substr($response, 0, 1) == '+') {
-            $response = explode(' ', $response);
-            return $response[1];
-        } else {
-            $this->emsg = substr($response, 5);
-            return false;
-        }
-    }
-    
-    /*
-     * push a job into queue
-     */
     public function enqueue($name, $prival, $delay, $job)
     {
         $len = strlen($job);
@@ -40,6 +20,7 @@ class mx_queued
         fwrite($this->conn, "enqueue $name $prival $delay $len\r\n$job\r\n");
 
         $response = fgets($this->conn);
+        echo $response;
         if (substr($response, 0, 1) == '+') {
             return true;
         } else {
@@ -48,14 +29,12 @@ class mx_queued
         }
     }
     
-    /*
-     * get a job from queue and delete it
-     */
     public function dequeue($name)
     {
         fwrite($this->conn, "dequeue $name\r\n");
         
         $response = fgets($this->conn);
+        echo $response;
         if (substr($response, 0, 1) == '+') {
             $response = explode(' ', $response);
             $size = $response[1] + 2;
@@ -71,9 +50,6 @@ class mx_queued
         return $job;
     }
     
-    /*
-     * get a job from queue and push it into recycle queue
-     */
     public function touch($name)
     {
         fwrite($this->conn, "touch $name\r\n");
@@ -95,9 +71,6 @@ class mx_queued
         return array('id' => $recycle_id, 'job' => $job);
     }
     
-    /*
-     * recycle a job
-     */
     public function recycle($id, $prival, $delay)
     {
         fwrite($this->conn, "recycle $id $prival $delay\r\n");
@@ -111,33 +84,29 @@ class mx_queued
         }
     }
     
-    /*
-     * remove a queue
-     */
-    public function remove($name)
+    public function size($name)
     {
-        fwrite($this->conn, "remove $name\r\n");
-
+        fwrite($this->conn, "size $name\r\n");
+        
         $response = fgets($this->conn);
+        echo $response;
         if (substr($response, 0, 1) == '+') {
-            return true;
+            $response = explode(' ', $response);
+            return $response[1];
         } else {
             $this->emsg = substr($response, 5);
             return false;
         }
     }
     
-    /*
-     * how many jobs was queue has?
-     */
-    public function size($name)
+    public function auth($user, $pass)
     {
-        fwrite($this->conn, "size $name\r\n");
+        fwrite($this->conn, "auth $user $pass\r\n");
         
         $response = fgets($this->conn);
+        echo $response;
         if (substr($response, 0, 1) == '+') {
-            $response = explode(' ', $response);
-            return $response[1];
+            return true;
         } else {
             $this->emsg = substr($response, 5);
             return false;
@@ -156,9 +125,38 @@ class mx_queued
         }
     }
     
-    /*
-     * get the last error message
-     */
+    
+    public function exec($func, $args = NULL)
+    {
+        if (is_array($args))
+        {
+            $cnt = count($args);
+            $arg = implode(' ', $args);
+
+            if ($cnt > 0) {
+                $cmd = "exec {$func} {$cnt} {$arg}\r\n";
+            } else {
+                $cmd = "exec {$func} 0\r\n";
+            }
+
+        } else if (is_string($args)) {
+            $cmd = "exec {$func} 1 {$args}\r\n";
+        } else {
+            $cmd = "exec {$func} 0\r\n";
+        }
+
+        fwrite($this->conn, $cmd);
+
+        $response = fgets($this->conn);
+        if ($response && substr($response, 0, 1) == '+') {
+            return true;
+        } else {
+            $this->emsg = substr($response, 5);
+            return false;
+        }
+    }
+
+
     public function error_message()
     {
         return $this->emsg;

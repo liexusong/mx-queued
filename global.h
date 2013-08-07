@@ -7,6 +7,10 @@
 #include "hash.h"
 #include "utils.h"
 
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
+
 #define  CR_CHR  '\r'
 #define  LF_CHR  '\n'
 #define  CRLF    "\r\n"
@@ -21,6 +25,8 @@
 
 #define MX_DEFAULT_BGSAVE_PATH  "mx-queued.db"
 #define MX_DEFAULT_LOG_PATH     "mx-queued.log"
+
+#define MX_HOMEPAGE_URL  "https://github.com/liexusong/mx-queued"
 
 typedef struct mx_global_s mx_global_t;
 typedef struct mx_connection_s mx_connection_t;
@@ -43,8 +49,8 @@ enum mx_event_state_e {
 
 
 typedef enum {
-	mx_send_job_header,
-	mx_send_job_body
+    mx_send_job_header,
+    mx_send_job_body
 } mx_send_job_state;
 
 
@@ -88,6 +94,11 @@ struct mx_global_s {
     HashTable *auth_table;
     int auth_enable;
     char *auth_file;
+
+    /* lua support */
+    int lua_enable;
+    char *lualib_file;
+    lua_State *lvm;
 
     FILE *log;
     char *log_path;
@@ -160,5 +171,7 @@ mx_job_t *mx_job_create(mx_queue_t *belong, int prival, int delay, int length);
 mx_queue_t *mx_queue_create(char *name, int name_len);
 int mx_try_bgsave_queues();
 int mx_load_queues();
+int mx_lua_init(char *lua_file);
+void mx_lua_close();
 
 #endif

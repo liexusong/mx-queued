@@ -57,6 +57,7 @@ void mx_command_touch_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens);
+void mx_command_exec_handler(mx_connection_t *c, mx_token_t *tokens);
 
 mx_command_t mx_commands[] = {
     {"ping",    sizeof("ping")-1,    mx_command_ping_handler,    0},
@@ -67,6 +68,7 @@ mx_command_t mx_commands[] = {
     {"recycle", sizeof("recycle")-1, mx_command_recycle_handler, 3},
     {"remove",  sizeof("remove")-1,  mx_command_remove_handler,  1},
     {"size",    sizeof("size")-1,    mx_command_size_handler,    1},
+    {"exec",    sizeof("exec")-1,    mx_command_exec_handler,   -1},
     {NULL, 0, NULL},
 };
 
@@ -143,7 +145,8 @@ void mx_disable_write_event(mx_connection_t *c)
 }
 
 
-void mx_event_process_handler(aeEventLoop *eventLoop, int sock, void *data, int mask)
+void mx_event_process_handler(aeEventLoop *eventLoop, int sock,
+    void *data, int mask)
 {
     mx_connection_t *c = (mx_connection_t *)data;
 
@@ -159,7 +162,8 @@ void mx_event_process_handler(aeEventLoop *eventLoop, int sock, void *data, int 
         if (c->revent_handler) {
             c->revent_handler(c);
         } else {
-            mx_write_log(mx_log_error, "haven't set read event handler but read event trigger");
+            mx_write_log(mx_log_error,
+                "haven't set read event handler but read event trigger");
         }
 
         break;
@@ -174,7 +178,8 @@ void mx_event_process_handler(aeEventLoop *eventLoop, int sock, void *data, int 
         if (c->wevent_handler) {
             c->wevent_handler(c);
         } else {
-           mx_write_log(mx_log_error, "haven't set write event handler but write event trigger");
+           mx_write_log(mx_log_error,
+               "haven't set write event handler but write event trigger");
         }
 
         break;
@@ -278,7 +283,9 @@ do_again:
     }
 
     cmd = mx_command_find(tokens[0].value);
-    if (NULL == cmd || cmd->argc != (amount - 1)) {
+    if (NULL == cmd || (cmd->argc != -1 &&
+                        cmd->argc != (amount - 1)))
+    {
         mx_send_fail_reply(c, "invaild");
         return;
     }
@@ -513,7 +520,8 @@ void mx_send_job_handler(mx_connection_t *c)
         wcount = write(c->sock, c->sendpos, wsize);
         if (wcount == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
+                mx_write_log(mx_log_debug,
+                      "Failed to write, and not due to blocking");
                 mx_connection_free(c);
             }
             return;
@@ -539,7 +547,8 @@ send_body_flag:
 
         if (wcount == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                mx_write_log(mx_log_debug, "Failed to write, and not due to blocking");
+                mx_write_log(mx_log_debug,
+                      "Failed to write, and not due to blocking");
                 mx_connection_free(c);
             }
             return;
@@ -557,7 +566,8 @@ send_body_flag:
 
             if (c->recycle) { /* job would be recycle */
                 c->job->timeout = mx_current_time + mx_global->recycle_timeout;
-                mx_skiplist_insert(mx_global->recycle_queue, c->recycle_id, c->job);
+                mx_skiplist_insert(mx_global->recycle_queue,
+                      c->recycle_id, c->job);
                 c->recycle = 0;
                 c->recycle_id = 0;
             } else {
@@ -611,7 +621,8 @@ void mx_send_reply(mx_connection_t *c, mx_reply_type type, char *str)
 
     /* output string too big */
     if (slen + rlen + 2 > (c->sendend - c->sendlast)) {
-        mx_write_log(mx_log_notice, "Output string too big, socket(%d)", c->sock);
+        mx_write_log(mx_log_notice,
+              "Output string too big, socket(%d)", c->sock);
         return;
     }
 
@@ -789,7 +800,8 @@ void mx_connection_accept(aeEventLoop *eventLoop, int fd, void *data, int mask)
 
     c = mx_connection_create(sock);
     if (c == NULL) {
-        mx_write_log(mx_log_error, "not enough memory to create connection object");
+        mx_write_log(mx_log_error,
+              "not enough memory to create connection object");
     }
 
     return;
@@ -983,11 +995,18 @@ int mx_server_startup()
         mx_write_log(mx_log_error, "failed to create recycle queue");
         goto failed;
     }
-    
+
     if (mx_global->auth_enable) {
         mx_global->auth_table = hash_alloc(16);
         if (!mx_global->auth_table || mx_create_auth_table() == -1) {
             mx_write_log(mx_log_error, "failed to create command's table");
+            goto failed;
+        }
+    }
+
+    if (mx_global->lua_enable) {
+        if (mx_lua_init(mx_global->lualib_file) == -1) {
+            mx_write_log(mx_log_error, "failed to create lua vm");
             goto failed;
         }
     }
@@ -1040,6 +1059,8 @@ failed:
         hash_destroy(mx_global->auth_table, free);
     }
 
+    mx_lua_close();
+
     if (mx_global->event) {
         aeDeleteEventLoop(mx_global->event);
     }
@@ -1065,6 +1086,8 @@ void mx_server_shutdown()
     if (mx_global->auth_table) {
         hash_destroy(mx_global->auth_table, free);
     }
+
+    mx_lua_close();
 
     aeDeleteEventLoop(mx_global->event);
 
@@ -1098,6 +1121,10 @@ void mx_default_init()
     mx_global->auth_table = NULL;
     mx_global->auth_enable = 0;
     mx_global->auth_file = NULL;
+
+    mx_global->lua_enable = 0;
+    mx_global->lualib_file = NULL;
+    mx_global->lvm = NULL;
 
     mx_global->log = NULL;
     mx_global->log_path = MX_DEFAULT_LOG_PATH;
@@ -1146,6 +1173,7 @@ const struct option long_options[] = {
     {"log-path",        1, NULL, 'l'},
     {"log-level",       1, NULL, 'L'},
     {"auth-file",       1, NULL, 'a'},
+    {"lualib",          1, NULL, 'f'},
     {NULL,              0, NULL, 0  }
 };
 
@@ -1226,6 +1254,14 @@ void mx_parse_options(int argc, char *argv[])
                 exit(-1);
             }
             break;
+        case 'f':
+            mx_global->lua_enable = 1;
+            mx_global->lualib_file = strdup(optarg);
+            if (!mx_global->lualib_file) {
+                fprintf(stderr, "[error] can not duplicate lualib file path.\n");
+                exit(-1);
+            }
+            break;
         default:
             exit(-1);
         }
@@ -1282,7 +1318,7 @@ int main(int argc, char *argv[])
     }
 
     if (mx_server_startup() == -1) {
-        fprintf(stderr, "[error] failed to initialization server environment.\n");
+        mx_write_log(mx_log_error, "failed to initialization server environment");
         exit(-1);
     }
 
@@ -1318,6 +1354,7 @@ mx_queue_t *mx_queue_create(char *name, int name_len)
         memcpy(queue->name, name, name_len);
         queue->name[name_len] = 0;
         queue->name_len = name_len;
+
     } else {
         mx_global->outof_memory++;
     }
@@ -1479,6 +1516,7 @@ void mx_command_enqueue_handler(mx_connection_t *c, mx_token_t *tokens)
     if (remain > 0) {
         int tocpy = remain > c->job_body_read ?
                              c->job_body_read : remain;
+
         memcpy(c->job_body_cptr, c->recvpos, tocpy);
 
         c->job_body_cptr += tocpy;
@@ -1624,6 +1662,60 @@ void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens)
 
     sprintf(sndbuf, "%d", mx_skiplist_size(queue->list));
     mx_send_ok_reply(c, sndbuf);
+
+    return;
+}
+
+
+void mx_command_exec_handler(mx_connection_t *c, mx_token_t *tokens)
+{
+    int params, i, index;
+    int retval;
+
+    if (!mx_global->lua_enable) {
+        mx_send_fail_reply(c, "disable");
+        return;
+    }
+
+    mx_failed_and_reply(
+        mx_atoi(tokens[2].value, &params) == -1,
+        "invaild"
+    );
+
+    lua_getglobal(mx_global->lvm, tokens[1].value);
+
+    /* push params to stack */
+    for (i = 0; i < params; i++) {
+        index = i + 3;
+        lua_pushlstring(mx_global->lvm, tokens[index].value,
+                                        tokens[index].length);
+    }
+
+    retval = lua_pcall(mx_global->lvm, params, 1, 0);
+    if (retval != 0) {
+        mx_write_log(mx_log_notice, "failed to call function `%s', error: %s\n",
+                tokens[1].value, lua_tostring(mx_global->lvm, -1));
+        mx_send_fail_reply(c, "failed");
+        return;
+    }
+
+    if (!lua_isboolean(mx_global->lvm, -1)) {
+        mx_send_fail_reply(c, "failed");
+        return;
+    }
+
+    retval = lua_toboolean(mx_global->lvm, -1);
+
+    switch (retval) {
+    case 0:
+        mx_send_fail_reply(c, "failed");
+        break;
+    default:
+        mx_send_ok_reply(c, "done");
+        break;
+    }
+
+    lua_pop(mx_global->lvm, 1); /* clean stack */
 
     return;
 }
