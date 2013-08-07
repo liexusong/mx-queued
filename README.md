@@ -67,8 +67,8 @@ delay_time: job要延时的秒数<br />
   <b>exec</b> &lt;function&gt; &lt;args&gt; ...\r\n
 </code></pre>
 function: lua函数名<br />
-args: 参数个数
-...: 可以传递多个参数(参数之间以空格分隔)
+args: 参数个数<br />
+...: 可以传递多个参数(参数之间以空格分隔)<br />
 
 -------------------------------------------------
 
