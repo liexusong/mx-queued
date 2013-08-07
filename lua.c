@@ -70,7 +70,8 @@ static int mx_enqueue_lua_handler(lua_State *lvm)
     delay = luaL_checkint(lvm, 3);
     job_body = luaL_checklstring(lvm, 4, (size_t *)&size);
 
-    if (hash_lookup(mx_global->queue_table, (char *)name, (void **)&queue) == -1) {
+    if (hash_lookup(mx_global->queue_table, (char *)name,
+                                       (void **)&queue) == -1) {
 
         queue = mx_queue_create((char *)name, strlen(name));
         if (queue == NULL) {
@@ -116,6 +117,25 @@ static int mx_enqueue_lua_handler(lua_State *lvm)
 }
 
 
+static int mx_size_lua_handler(lua_State *lvm)
+{
+    const char *name;
+    mx_queue_t *queue;
+
+    name = luaL_checkstring(lvm, 1);
+
+    if (hash_lookup(mx_global->queue_table, (char *)name,
+                                     (void **)&queue) == -1)
+    {
+        lua_pushnumber(lvm, 0);
+        return 1;
+    }
+
+    lua_pushnumber(lvm, mx_skiplist_size(queue->list));
+    return 1;
+}
+
+
 int mx_register_lua_functions()
 {
     lua_pushcfunction(mx_global->lvm, mx_dequeue_lua_handler);
@@ -123,6 +143,9 @@ int mx_register_lua_functions()
 
     lua_pushcfunction(mx_global->lvm, mx_enqueue_lua_handler);
     lua_setglobal(mx_global->lvm, "mx_enqueue");
+
+    lua_pushcfunction(mx_global->lvm, mx_size_lua_handler);
+    lua_setglobal(mx_global->lvm, "mx_queue_size");
 
     return 0;
 }
