@@ -74,6 +74,7 @@ args: 参数个数<br />
 
 安装：
 <pre><code>
+$ install lua
 $ cd mx-queue/
 $ make
 </code></pre>
