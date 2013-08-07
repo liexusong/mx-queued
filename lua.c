@@ -26,6 +26,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include "global.h"
 
 
@@ -67,7 +68,7 @@ static int mx_enqueue_lua_handler(lua_State *lvm)
     name = luaL_checkstring(lvm, 1);
     prival = luaL_checkint(lvm, 2);
     delay = luaL_checkint(lvm, 3);
-    job_body = luaL_checklstring(lvm, 4, &size);
+    job_body = luaL_checklstring(lvm, 4, (size_t *)&size);
 
     if (hash_lookup(mx_global->queue_table, (char *)name, (void **)&queue) == -1) {
 
