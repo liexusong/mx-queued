@@ -61,6 +61,15 @@ recycle_id: job在回收站的ID, 由touch命令提供<br />
 priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
 
+
+* 执行lua函数
+<pre><code>
+  <b>exec</b> &lt;function&gt; &lt;args&gt; ...\r\n
+</code></pre>
+function: lua函数名<br />
+args: 参数个数
+...: 可以传递多个参数(参数之间以空格分隔)
+
 -------------------------------------------------
 
 安装：
@@ -82,6 +91,7 @@ $ make
 --log-path &lt;path&gt;             日志保存的路径
 --log-level &lt;level&gt;           日志等级, 可以选择(error|notice|debug)这几个
 --auth-file &lt;path&gt;            开启认证功能并指定认证文件
+--lualib &lt;path&gt;               载入Lua函数库文件(并开启Lua功能)
 --version                     打印服务器的版本
 --help                        打印使用指南
 </code></pre>
@@ -91,11 +101,6 @@ $ make
 <pre><code>
 ./mx-queued --log-level debug --bgsave-enable
 </code></pre>
-
--------------------------------------------------
-
-TODO:
-   增加Lua功能
 
 -------------------------------------------------
 

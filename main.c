@@ -1147,6 +1147,7 @@ void mx_usage(void)
     printf("    --log-path <path>             log save path.\n");
     printf("    --log-level <level>           log level (error|notice|debug).\n");
     printf("    --auth-file <path>            enable auth feature and set auth file path.\n");
+    printf("    --lualib <path>               enable lua feature and lua library file path.\n");
     printf("    --version                     print this current version and exit.\n");
     printf("    --help                        print this help and exit.\n");
     return;
