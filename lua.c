@@ -38,19 +38,21 @@ static int mx_dequeue_lua_handler(lua_State *lvm)
 
     name = luaL_checkstring(lvm, 1);
 
-    if (hash_lookup(mx_global->queue_table, (char *)name, (void **)&queue) == -1) {
+    if (hash_lookup(mx_global->queue_table, (char *)name,
+                                            (void **)&queue) == -1)
+    {
         lua_pushnil(lvm);
         return 1;
     }
 
     if (mx_skiplist_find_top(queue->list, (void **)&job) ==
-                                             SKL_STATUS_KEY_NOT_FOUND) {
+                                           SKL_STATUS_KEY_NOT_FOUND) {
         lua_pushnil(lvm);
         return 1;
     }
 
     mx_skiplist_delete_top(queue->list);
-    lua_pushlstring(lvm, job->body, job->length);
+    lua_pushlstring(lvm, job->body, job->length); /* copy to Lua */
     mx_job_free(job);
 
     return 1;
@@ -152,6 +154,19 @@ int mx_register_lua_functions()
 }
 
 
+/*
+ * Unlock lvm lock helper function
+ */
+void mx_unlock_lvm(aeEventLoop *eventLoop, int fd, void *data, int mask)
+{
+    char c;
+
+    (void)read(fd, &c, 1); /* read a char from pipe */
+
+    pthread_mutex_unlock(&mx_global->lvm_lock);
+}
+
+
 int mx_lua_init(char *lua_file)
 {
     mx_global->lvm = luaL_newstate(); /* create Lua vm */
@@ -173,6 +188,15 @@ int mx_lua_init(char *lua_file)
         return -1;
     }
 
+    pthread_mutex_init(&mx_global->lvm_lock, NULL);
+
+    if (pipe(mx_global->lvm_pipe) < 0) {
+        return -1;
+    }
+
+    aeCreateFileEvent(mx_global->event, mx_global->lvm_pipe[0], 
+           AE_READABLE, mx_unlock_lvm, NULL);
+
     return 0;
 }
 
@@ -181,5 +205,8 @@ void mx_lua_close()
 {
     if (mx_global->lua_enable && mx_global->lvm) {
         lua_close(mx_global->lvm);
+        pthread_mutex_destroy(&mx_global->lvm_lock);
+        close(mx_global->lvm_pipe[0]);
+        close(mx_global->lvm_pipe[1]);
     }
 }

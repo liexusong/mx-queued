@@ -58,6 +58,7 @@ void mx_command_recycle_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_remove_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_size_handler(mx_connection_t *c, mx_token_t *tokens);
 void mx_command_exec_handler(mx_connection_t *c, mx_token_t *tokens);
+void mx_command_async_handler(mx_connection_t *c, mx_token_t *tokens);
 
 mx_command_t mx_commands[] = {
     {"ping",    sizeof("ping")-1,    mx_command_ping_handler,    0},
@@ -69,6 +70,7 @@ mx_command_t mx_commands[] = {
     {"remove",  sizeof("remove")-1,  mx_command_remove_handler,  1},
     {"size",    sizeof("size")-1,    mx_command_size_handler,    1},
     {"exec",    sizeof("exec")-1,    mx_command_exec_handler,   -1},
+    {"async",   sizeof("async")-1,   mx_command_async_handler,  -1},
     {NULL, 0, NULL},
 };
 
@@ -1004,13 +1006,6 @@ int mx_server_startup()
         }
     }
 
-    if (mx_global->lua_enable) {
-        if (mx_lua_init(mx_global->lualib_file) == -1) {
-            mx_write_log(mx_log_error, "failed to create lua vm");
-            goto failed;
-        }
-    }
-
     mx_global->event = aeCreateEventLoop();
     if (NULL == mx_global->event) {
         mx_write_log(mx_log_error, "failed to create event object");
@@ -1025,6 +1020,14 @@ int mx_server_startup()
     }
 
     aeCreateTimeEvent(mx_global->event, 1, mx_core_timer, NULL, NULL);
+
+    /* must be final */
+    if (mx_global->lua_enable) {
+        if (mx_lua_init(mx_global->lualib_file) == -1) {
+            mx_write_log(mx_log_error, "failed to create lua vm");
+            goto failed;
+        }
+    }
 
     return 0;
 
@@ -1678,6 +1681,12 @@ void mx_command_exec_handler(mx_connection_t *c, mx_token_t *tokens)
         return;
     }
 
+    /* try to get lvm lock */
+    if (pthread_mutex_trylock(&mx_global->lvm_lock) != 0) {
+        mx_send_fail_reply(c, "locked");
+        return;
+    }
+
     mx_failed_and_reply(
         mx_atoi(tokens[2].value, &params) == -1,
         "invaild"
@@ -1717,6 +1726,83 @@ void mx_command_exec_handler(mx_connection_t *c, mx_token_t *tokens)
     }
 
     lua_pop(mx_global->lvm, 1); /* clean stack */
+
+    pthread_mutex_unlock(&mx_global->lvm_lock);
+
+    return;
+}
+
+
+void *mx_lua_async_handler(void *arg)
+{
+    int params = (int)arg;
+    char nil = '\0';
+    int ret;
+
+    /* here had get the lvm lock */
+
+    ret = lua_pcall(mx_global->lvm, params, 1, 0); /* slowly call */
+
+    if (ret != 0) {
+        mx_write_log(mx_log_notice, "failed to call async function, error: %s\n",
+              lua_tostring(mx_global->lvm, -1));
+        goto complete;
+    }
+
+    if (!lua_isboolean(mx_global->lvm, -1)) {
+        goto complete;
+    }
+
+    (void)lua_toboolean(mx_global->lvm, -1); /* ignore return value */
+    lua_pop(mx_global->lvm, 1);              /* clean return stack */
+
+complete:
+    write(mx_global->lvm_pipe[1], &nil, 1); /* notify main thread unlock lvm */
+    return NULL;
+}
+
+
+void mx_command_async_handler(mx_connection_t *c, mx_token_t *tokens)
+{
+    pthread_t tid;
+    int params, i, index;
+    int ret;
+
+    if (!mx_global->lua_enable) {
+        mx_send_fail_reply(c, "disable");
+        return;
+    }
+
+    /* try to get lvm lock */
+    if (pthread_mutex_trylock(&mx_global->lvm_lock) != 0) {
+        mx_send_fail_reply(c, "locked");
+        return;
+    }
+
+    mx_failed_and_reply(
+        mx_atoi(tokens[2].value, &params) == -1,
+        "invaild"
+    );
+
+    lua_getglobal(mx_global->lvm, tokens[1].value);
+
+    /* push params to stack */
+    for (i = 0; i < params; i++) {
+        index = i + 3;
+        lua_pushlstring(mx_global->lvm, tokens[index].value,
+                                        tokens[index].length);
+    }
+
+    ret = pthread_create(&tid, NULL, mx_lua_async_handler, (void *)params);
+    if (ret != 0) {
+        mx_send_fail_reply(c, "failed");
+    } else {
+        mx_send_ok_reply(c, "done");
+    }
+
+    pthread_detach(tid);
+
+    /* don't unlock lvm lock, because thread would unlock it */
 
     return;
 }

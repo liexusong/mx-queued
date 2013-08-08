@@ -99,6 +99,8 @@ struct mx_global_s {
     int lua_enable;
     char *lualib_file;
     lua_State *lvm;
+    pthread_mutex_t lvm_lock;
+    int lvm_pipe[2];
 
     FILE *log;
     char *log_path;
