@@ -62,7 +62,7 @@ priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
 
 
-* 同步执行lua函数
+* 同步执行lua函数 (如果Lua函数操作比较复杂, 可能会阻塞服务器, 所以此时建议使用async命令)
 <pre><code>
   <b>exec</b> &lt;function&gt; &lt;args&gt; ...\r\n
 </code></pre>
