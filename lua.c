@@ -51,6 +51,7 @@ static int mx_dequeue_lua_handler(lua_State *lvm)
 
     mx_skiplist_delete_top(queue->list);
     lua_pushlstring(lvm, job->body, job->length);
+    mx_job_free(job);
 
     return 1;
 }
