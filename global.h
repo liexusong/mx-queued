@@ -168,6 +168,7 @@ extern time_t mx_current_time;
 
 void mx_write_log(mx_log_level level, const char *fmt, ...);
 mx_job_t *mx_job_create(mx_queue_t *belong, int prival, int delay, int length);
+void mx_job_free(void *job);
 mx_queue_t *mx_queue_create(char *name, int name_len);
 int mx_try_bgsave_queues();
 int mx_load_queues();
