@@ -62,9 +62,18 @@ priority_value: job的优先值, 值越大越迟获取到<br />
 delay_time: job要延时的秒数<br />
 
 
-* 执行lua函数
+* 同步执行lua函数
 <pre><code>
   <b>exec</b> &lt;function&gt; &lt;args&gt; ...\r\n
+</code></pre>
+function: lua函数名<br />
+args: 参数个数<br />
+...: 可以传递多个参数(参数之间以空格分隔)<br />
+
+
+* 异步执行lua函数 (此命令会启用一个线程来执行一个Lua函数)
+<pre><code>
+  <b>async</b> &lt;function&gt; &lt;args&gt; ...\r\n
 </code></pre>
 function: lua函数名<br />
 args: 参数个数<br />
