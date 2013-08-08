@@ -70,7 +70,9 @@ mx_command_t mx_commands[] = {
     {"remove",  sizeof("remove")-1,  mx_command_remove_handler,  1},
     {"size",    sizeof("size")-1,    mx_command_size_handler,    1},
     {"exec",    sizeof("exec")-1,    mx_command_exec_handler,   -1},
+#if 0
     {"async",   sizeof("async")-1,   mx_command_async_handler,  -1},
+#endif
     {NULL, 0, NULL},
 };
 
@@ -1798,9 +1800,8 @@ void mx_command_async_handler(mx_connection_t *c, mx_token_t *tokens)
         mx_send_fail_reply(c, "failed");
     } else {
         mx_send_ok_reply(c, "done");
+        pthread_detach(tid);
     }
-
-    pthread_detach(tid);
 
     /* don't unlock lvm lock, because thread would unlock it */
 
