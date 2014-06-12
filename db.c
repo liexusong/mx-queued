@@ -25,6 +25,8 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
